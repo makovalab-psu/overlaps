@@ -9,8 +9,8 @@ assert sys.version_info.major >= 3, 'Python 3 required'
 DESCRIPTION = """"""
 
 class Error(object):
-  __slots__ = ('type', 'seq', 'aln_coord', 'read_coord', 'alt', 'passes')
-  defaults = {'passes':True}
+  __slots__ = ('type', 'rname', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2')
+  defaults = {'type':'snv'}
   def __init__(self, **kwargs):
     for name in self.__slots__:
       if name in kwargs:
@@ -24,6 +24,8 @@ def make_argparser():
   parser = argparse.ArgumentParser(description=DESCRIPTION)
   parser.add_argument('bam', type=pathlib.Path,
     help='Name-sorted BAM file.')
+  parser.add_argument('-p', '--print', action='store_true',
+    help='Debug print the alignment as pysam sees it.')
   parser.add_argument('-l', '--log', type=argparse.FileType('w'), default=sys.stderr,
     help='Print log messages to this file instead of to stderr. Warning: Will overwrite the file.')
   volume = parser.add_mutually_exclusive_group()
@@ -41,8 +43,13 @@ def main(argv):
 
   logging.basicConfig(stream=args.log, level=args.volume, format='%(message)s')
 
+  if args.print:
+    print_alignment(args.bam)
+    return
+
   for pair in get_pairs(args.bam):
-    print(pair[0].query_name)
+    print(pair[0].query_name+':')
+    get_mismatches(pair)
 
 
 def get_pairs(bam_path):
@@ -50,12 +57,16 @@ def get_pairs(bam_path):
   pair = None
   last_name = None
   for read in bam.fetch(until_eof=True):
-    print(mated_name(read))
+    logging.debug(mated_name(read))
     name = read.query_name
     assert not (name.endswith('/1') or name.endswith('/2')), name
     mate_num = which_mate(read)
     assert mate_num in (1, 2), read.flag
-    print(f'pair: {format_pair(pair)}')
+    logging.debug(f'pair: {format_pair(pair)}')
+    #TODO: Rely on something other than flag 2. Pairs can be both mapped, but not in their proper
+    #      pair. Also, you might eventually want to filter by MAPQ.
+    #      Best to gather the pair if they both have the same name, then judge later whether they're
+    #      both mapped acceptably.
     if pair is None:
       if mate_is_mapped(read):
         if mate_num == 1:
@@ -64,32 +75,16 @@ def get_pairs(bam_path):
           pair = [None, read]
     else:
       if pair[0] is None:
-        print(f'  setting pair[0] = {mated_name(read)}')
+        logging.debug(f'  setting pair[0] = {mated_name(read)}')
         pair[0] = read
       elif pair[1] is None:
-        print(f'  setting pair[1] = {mated_name(read)}')
+        logging.debug(f'  setting pair[1] = {mated_name(read)}')
         pair[1] = read
       else:
         fail('Error: Invalid pair.')
       validate_pair(pair)
       yield pair
       pair = None
-
-
-def format_pair(pair):
-  if pair is None:
-    return 'None'
-  read_strs = []
-  for read in pair:
-    if read is None:
-      read_strs.append('None')
-    else:
-      read_strs.append(mated_name(read))
-  return read_strs
-
-
-def mated_name(read):
-  return f'{read.query_name}/{which_mate(read)}'
 
 
 def validate_pair(pair):
@@ -113,9 +108,51 @@ def validate_pair(pair):
     )
 
 
+def get_mismatches(pair):
+  read1, read2 = pair
+  base_map = get_base_map(read2)
+  positions = read1.get_reference_positions()
+  sequence = read1.query_sequence
+  started = False
+  for pos, base1 in zip(positions, sequence):
+    base2 = base_map.get(pos)
+    if base2 is None:
+      if started:
+        print(f'  {pos:2d}: {base1} -> <DEL>')
+        #TODO: Oops, insertions don't have a reference position. How to detect them?
+        #      Doesn't look like pysam gives an easy way. Looks like more CIGAR parsing?
+    else:
+      started = True
+      if base1 != base2:
+        print(f'  {pos:2d}: {base1} -> {base2}')
+
+
+def get_base_map(read):
+  """Return a mapping of reference coordinates to read bases."""
+  positions = read.get_reference_positions()
+  sequence = read.query_sequence
+  return dict(zip(positions, sequence))
+
+
+def format_pair(pair):
+  if pair is None:
+    return 'None'
+  read_strs = []
+  for read in pair:
+    if read is None:
+      read_strs.append('None')
+    else:
+      read_strs.append(mated_name(read))
+  return read_strs
+
+
+def mated_name(read):
+  return f'{read.query_name}/{which_mate(read)}'
+
+
 def print_alignment(bam_path):
   bam = pysam.AlignmentFile(bam_path, 'rb')
-  for read in bam.fetch():
+  for read in bam.fetch(until_eof=True):
     line = f'{read.query_name}/{which_mate(read)}:'
     seq = read.query_sequence
     ref_pos = read.get_reference_positions()
