@@ -26,6 +26,8 @@ def make_argparser():
   parser = argparse.ArgumentParser(description=DESCRIPTION)
   parser.add_argument('align', type=pathlib.Path,
     help='Name-sorted BAM or SAM file.')
+  parser.add_argument('-q', '--mapq', type=int,
+    help='Mapping quality threshold. Alignments worse than this MAPQ will be ignored.')
   parser.add_argument('-H', '--human', dest='format', action='store_const', const='human',
     default='tsv',
     help='Print human-readable text instead of tab-delimited output.')
@@ -42,7 +44,7 @@ def make_argparser():
   parser.add_argument('-l', '--log', type=argparse.FileType('w'), default=sys.stderr,
     help='Print log messages to this file instead of to stderr. Warning: Will overwrite the file.')
   volume = parser.add_mutually_exclusive_group()
-  volume.add_argument('-q', '--quiet', dest='volume', action='store_const', const=logging.CRITICAL,
+  volume.add_argument('-Q', '--quiet', dest='volume', action='store_const', const=logging.CRITICAL,
     default=logging.WARNING)
   volume.add_argument('-v', '--verbose', dest='volume', action='store_const', const=logging.INFO)
   volume.add_argument('-D', '--debug', dest='volume', action='store_const', const=logging.DEBUG)
@@ -69,24 +71,23 @@ def main(argv):
     print_alignment(align_file, args.detailed_read)
     return
 
-  stats = print_andor_compile_stats(align_file, args.format, details)
+  stats = print_andor_compile_stats(align_file, args.format, details, args.mapq)
 
   if summary:
     print(format_summary_stats(stats, args.format))
 
 
-def print_andor_compile_stats(align_file, format, details):
-  total_bases = 0
-  total_overlap = 0
-  total_errors = 0
-  for pair in get_pairs(align_file):
+def print_andor_compile_stats(align_file, format, details, mapq_thres):
+  stats = {'reads':0, 'pairs':0, 'bases':0, 'overlap':0, 'errors':0}
+  for pair in get_pairs(align_file, stats, mapq_thres):
     errors, overlap_len = get_mismatches(pair)
-    total_bases += len(pair[0].seq) + len(pair[1].seq)
-    total_overlap += overlap_len
-    total_errors += len(errors)
+    stats['bases'] += len(pair[0].seq) + len(pair[1].seq)
+    stats['overlap'] += overlap_len
+    stats['errors'] += len(errors)
+    stats['pairs'] += 1
     if details:
       print(format_read_stats(errors, pair, overlap_len, format=format))
-  return {'bases':total_bases, 'overlap':total_overlap, 'errors':total_errors}
+  return stats
 
 
 def open_input(align_path):
@@ -105,59 +106,47 @@ def open_bam(bam_path):
     yield str(line, 'utf8')
 
 
-def get_pairs(align_file):
-  pair = None
+def get_pairs(align_file, stats, mapq_thres=None):
+  pair = [None, None]
   last_name = None
   for read in samreader.read(align_file):
+    stats['reads'] += 1
     logging.debug(mated_name(read))
     name = read.qname
     assert not (name.endswith('/1') or name.endswith('/2')), name
     mate_num = which_mate(read)
     assert mate_num in (1, 2), read.flag
     logging.debug(f'pair: {format_pair(pair)}')
-    #TODO: Rely on something other than flag 2. Pairs can be both mapped, but not in their proper
-    #      pair. Also, you might eventually want to filter by MAPQ.
-    #      Best to gather the pair if they both have the same name, then judge later whether they're
-    #      both mapped acceptably.
-    if pair is None:
-      if mate_is_mapped(read):
-        if mate_num == 1:
-          pair = [read, None]
-        elif mate_num == 2:
-          pair = [None, read]
+    if pair[0] is None:
+      pair[0] = read
+      continue
+    elif pair[1] is None:
+      pair[1] = read
     else:
-      if pair[0] is None:
-        logging.debug(f'  setting pair[0] = {mated_name(read)}')
-        pair[0] = read
-      elif pair[1] is None:
-        logging.debug(f'  setting pair[1] = {mated_name(read)}')
-        pair[1] = read
-      else:
-        fail('Error: Invalid pair.')
-      validate_pair(pair)
+      raise fail(
+        'Error: Invalid state. Encountered a full pair too early. Pair:\n  {}\n  {}'
+        .format(pair[0].qname, pair[1].qname)
+      )
+    # We should only have full pairs at this point.
+    # If the names don't match, the first read can't have a mate in the file, since this is name-
+    # sorted. Discard it, shift the second read to the first position, and loop again.
+    if pair[0].qname != pair[1].qname:
+      pair = [pair[1], None]
+      continue
+    if pair_is_well_mapped(pair, mapq_thres):
       yield pair
-      pair = None
+    pair = [None, None]
 
 
-def validate_pair(pair):
+def pair_is_well_mapped(pair, mapq_thres=None):
   read1, read2 = pair
-  if read1.qname != read2.qname:
-    mate_states = []
-    for read in pair:
-      if mate_is_mapped(read):
-        mate_states.append('mate mapped')
-      else:
-        mate_states.append('mate unmapped')
-    fail(
-      f'Error: Sequential reads have different names: '
-      f'{read1.qname!r} ({mate_states[0]}) != '
-      f'{read2.qname!r} ({mate_states[1]})'
-    )
-  if which_mate(read1) != 1 or which_mate(read2) != 2:
-    fail(
-      f'Error: Mates were paired up incorrectly: mate 1 != {which_mate(read1)} or '
-      f'mate 2 != {which_mate(read2)}'
-    )
+  if not(read1.flag & 2 and read2.flag & 2):
+    return False
+  if read1.rnext is None or read2.rnext is None:
+    return False
+  if mapq_thres is not None and (read1.mapq < mapq_thres or read2.mapq < mapq_thres):
+    return False
+  return True
 
 
 def get_mismatches(pair):
@@ -185,7 +174,6 @@ def get_mismatches(pair):
         #TODO: Get the read coordinates (coord1, coord2).
         errors.append(error)
   return errors, overlap_len
-  # 'type', 'rname', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2'
 
 
 def get_base_map(read):
@@ -220,12 +208,13 @@ def format_read_stats_human(errors, pair, overlap_len):
 def format_summary_stats(stats, format='tsv'):
   if format == 'tsv':
     return (
-      '{errors}\t{overlap}\t{bases}\t{}'
+      '{}\t{errors}\t{overlap}\t{pairs}\t{reads}\t{bases}'
       .format(round(stats['errors']/stats['overlap'], 6), **stats)
     )
   elif format == 'human':
     return (
-      '{} errors per base: {errors} errors in {overlap}bp of overlap and {bases} total bases.'
+      '{} errors per base: {errors} errors in {overlap}bp of overlap.\n'
+      '{reads} total reads in {pairs} well-mapped pairs totalling {bases} bases (in the pairs).'
       .format(round(stats['errors']/stats['overlap'], 4), **stats)
     )
 
