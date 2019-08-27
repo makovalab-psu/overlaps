@@ -28,6 +28,9 @@ def make_argparser():
     help='Name-sorted BAM or SAM file.')
   parser.add_argument('-p', '--print', action='store_true',
     help='Debug print the alignment as cigarlib sees it.')
+  parser.add_argument('-R', '--detailed-read',
+    help='When using --print, single out this read and print every reference coordinate of every '
+      'base. Give the full read name, ending in a /1 or /2 for the mate.')
   parser.add_argument('-l', '--log', type=argparse.FileType('w'), default=sys.stderr,
     help='Print log messages to this file instead of to stderr. Warning: Will overwrite the file.')
   volume = parser.add_mutually_exclusive_group()
@@ -54,12 +57,18 @@ def main(argv):
     align_file = sys.stdin
 
   if args.print:
-    print_alignment(align_file)
+    print_alignment(align_file, args.detailed_read)
     return
 
   for pair in get_pairs(align_file):
-    print(pair[0].qname+':')
-    get_mismatches(pair)
+    errors, overlap_len = get_mismatches(pair)
+    print(f'{pair[0].qname}: {len(errors)} errors in {overlap_len}bp', end='')
+    if errors:
+      print(':')
+    else:
+      print()
+    for error in errors:
+      print(f'{error.ref_coord:4d} {error.type.upper()}: {error.alt1} -> {error.alt2}')
 
 
 def open_bam(bam_path):
@@ -124,21 +133,30 @@ def validate_pair(pair):
 
 
 def get_mismatches(pair):
+  errors = []
+  overlap_len = 0
   read1, read2 = pair
   base_map = get_base_map(read2)
   positions = get_reference_positions(read1)
   started = False
   for pos, base1 in zip(positions, read1.seq):
     base2 = base_map.get(pos)
-    if base2 is None:
+    if pos is None:
+      logging.debug(f'None: {base1} -> <INS>')
+    elif base2 is None:
       if started:
-        print(f'  {pos:2d}: {base1} -> <DEL>')
+        logging.debug(f'{pos:4d}: {base1} -> <DEL>')
         #TODO: Oops, insertions don't have a reference position. How to detect them?
-        #      Doesn't look like pysam gives an easy way. Looks like more CIGAR parsing?
+        #      Doesn't look like pysam gives an easy way. Looks like more CIGAR parsing.
     else:
       started = True
+      overlap_len += 1
       if base1 != base2:
-        print(f'  {pos:2d}: {base1} -> {base2}')
+        logging.debug(f'{pos:4d}: {base1} -> {base2}')
+        error = Error(type='snv', rname=read1.qname, ref_coord=pos, alt1=base1, alt2=base2)
+        #TODO: Get the read coordinates (coord1, coord2).
+        errors.append(error)
+  return errors, overlap_len
   # 'type', 'rname', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2'
 
 
@@ -148,7 +166,7 @@ def get_base_map(read):
   return dict(zip(positions, read.seq))
 
 
-def print_alignment(align_file):
+def print_alignment(align_file, detailed_read=None):
   for read in samreader.read(align_file):
     name = mated_name(read)
     line = name+':'
@@ -156,7 +174,7 @@ def print_alignment(align_file):
     started = False
     i = 0
     for pos, base in zip(ref_pos, read.seq):
-      if name == 'BB/2':
+      if name == detailed_read:
         if pos is None:
           print(f'None: {base}')
         else:
