@@ -2,8 +2,10 @@
 import argparse
 import logging
 import pathlib
+import subprocess
 import sys
-import pysam
+from bfx import cigarlib
+from bfx import samreader
 assert sys.version_info.major >= 3, 'Python 3 required'
 
 DESCRIPTION = """"""
@@ -22,10 +24,10 @@ class Error(object):
 
 def make_argparser():
   parser = argparse.ArgumentParser(description=DESCRIPTION)
-  parser.add_argument('bam', type=pathlib.Path,
-    help='Name-sorted BAM file.')
+  parser.add_argument('align', type=pathlib.Path,
+    help='Name-sorted BAM or SAM file.')
   parser.add_argument('-p', '--print', action='store_true',
-    help='Debug print the alignment as pysam sees it.')
+    help='Debug print the alignment as cigarlib sees it.')
   parser.add_argument('-l', '--log', type=argparse.FileType('w'), default=sys.stderr,
     help='Print log messages to this file instead of to stderr. Warning: Will overwrite the file.')
   volume = parser.add_mutually_exclusive_group()
@@ -43,22 +45,35 @@ def main(argv):
 
   logging.basicConfig(stream=args.log, level=args.volume, format='%(message)s')
 
+  if args.align:
+    if args.align.suffix == '.bam':
+      align_file = open_bam(args.align)
+    else:
+      align_file = open(args.align)
+  else:
+    align_file = sys.stdin
+
   if args.print:
-    print_alignment(args.bam)
+    print_alignment(align_file)
     return
 
-  for pair in get_pairs(args.bam):
-    print(pair[0].query_name+':')
+  for pair in get_pairs(align_file):
+    print(pair[0].qname+':')
     get_mismatches(pair)
 
 
-def get_pairs(bam_path):
-  bam = pysam.AlignmentFile(bam_path, 'rb')
+def open_bam(bam_path):
+  process = subprocess.Popen(('samtools', 'view', bam_path), stdout=subprocess.PIPE)
+  for line in process.stdout:
+    yield str(line, 'utf8')
+
+
+def get_pairs(align_file):
   pair = None
   last_name = None
-  for read in bam.fetch(until_eof=True):
+  for read in samreader.read(align_file):
     logging.debug(mated_name(read))
-    name = read.query_name
+    name = read.qname
     assert not (name.endswith('/1') or name.endswith('/2')), name
     mate_num = which_mate(read)
     assert mate_num in (1, 2), read.flag
@@ -89,7 +104,7 @@ def get_pairs(bam_path):
 
 def validate_pair(pair):
   read1, read2 = pair
-  if read1.query_name != read2.query_name:
+  if read1.qname != read2.qname:
     mate_states = []
     for read in pair:
       if mate_is_mapped(read):
@@ -98,8 +113,8 @@ def validate_pair(pair):
         mate_states.append('mate unmapped')
     fail(
       f'Error: Sequential reads have different names: '
-      f'{read1.query_name!r} ({mate_states[0]}) != '
-      f'{read2.query_name!r} ({mate_states[1]})'
+      f'{read1.qname!r} ({mate_states[0]}) != '
+      f'{read2.qname!r} ({mate_states[1]})'
     )
   if which_mate(read1) != 1 or which_mate(read2) != 2:
     fail(
@@ -111,10 +126,9 @@ def validate_pair(pair):
 def get_mismatches(pair):
   read1, read2 = pair
   base_map = get_base_map(read2)
-  positions = read1.get_reference_positions()
-  sequence = read1.query_sequence
+  positions = get_reference_positions(read1)
   started = False
-  for pos, base1 in zip(positions, sequence):
+  for pos, base1 in zip(positions, read1.seq):
     base2 = base_map.get(pos)
     if base2 is None:
       if started:
@@ -125,13 +139,38 @@ def get_mismatches(pair):
       started = True
       if base1 != base2:
         print(f'  {pos:2d}: {base1} -> {base2}')
+  # 'type', 'rname', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2'
 
 
 def get_base_map(read):
   """Return a mapping of reference coordinates to read bases."""
-  positions = read.get_reference_positions()
-  sequence = read.query_sequence
-  return dict(zip(positions, sequence))
+  positions = get_reference_positions(read)
+  return dict(zip(positions, read.seq))
+
+
+def print_alignment(align_file):
+  for read in samreader.read(align_file):
+    name = mated_name(read)
+    line = name+':'
+    ref_pos = get_reference_positions(read)
+    started = False
+    i = 0
+    for pos, base in zip(ref_pos, read.seq):
+      if name == 'BB/2':
+        if pos is None:
+          print(f'None: {base}')
+        else:
+          print(f'{pos:4d}: {base}')
+      while pos is not None and i < pos:
+        if started:
+          line += '-'
+        else:
+          line += ' '
+        i += 1
+      line += base
+      i += 1
+      started = True
+    print(line)
 
 
 def format_pair(pair):
@@ -147,28 +186,24 @@ def format_pair(pair):
 
 
 def mated_name(read):
-  return f'{read.query_name}/{which_mate(read)}'
+  return f'{read.qname}/{which_mate(read)}'
 
 
-def print_alignment(bam_path):
-  bam = pysam.AlignmentFile(bam_path, 'rb')
-  for read in bam.fetch(until_eof=True):
-    line = f'{read.query_name}/{which_mate(read)}:'
-    seq = read.query_sequence
-    ref_pos = read.get_reference_positions()
-    started = False
-    i = 0
-    for pos, base in zip(ref_pos, seq):
-      while i < pos:
-        if started:
-          line += '-'
-        else:
-          line += ' '
-        i += 1
-      line += base
-      i += 1
-      started = True
-    print(line)
+#TODO: Replace with more efficient implementation in cigarlib itself, if necessary.
+#      Take the blocks and compute chunks of coordinates at once.
+def get_reference_positions(read):
+  positions = []
+  readlen = len(read.seq)
+  cigar_list = cigarlib.split_cigar(read.cigar)
+  reverse = read_is_reversed(read)
+  blocks = cigarlib.get_contiguous_blocks(read.pos, cigar_list, reverse, readlen)
+  for read_coord in range(1, readlen+1):
+    ref_coord = cigarlib.to_ref_coord(blocks, read_coord)
+    positions.append(ref_coord)
+  if reverse:
+    return list(reversed(positions))
+  else:
+    return positions
 
 
 def which_mate(read):
@@ -176,6 +211,13 @@ def which_mate(read):
     return 1
   elif read.flag & 128:
     return 2
+
+
+def read_is_reversed(read):
+  if read.flag & 16:
+    return True
+  else:
+    return False
 
 
 def mate_is_mapped(read):
