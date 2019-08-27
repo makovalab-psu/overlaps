@@ -1,0 +1,3 @@
+[submodule "bfx"]
+	path = bfx
+	url = https://github.com/makovalab-psu/nick-bfx.git
