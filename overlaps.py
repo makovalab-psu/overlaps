@@ -26,6 +26,14 @@ def make_argparser():
   parser = argparse.ArgumentParser(description=DESCRIPTION)
   parser.add_argument('align', type=pathlib.Path,
     help='Name-sorted BAM or SAM file.')
+  parser.add_argument('-H', '--human', dest='format', action='store_const', const='human',
+    default='tsv',
+    help='Print human-readable text instead of tab-delimited output.')
+  parser.add_argument('-s', '--summary', action='store_true',
+    help='Print summary stats for the entire file. This is the default, unless --details is given. '
+      'Giving --summary AND --details forces both to be printed.')
+  parser.add_argument('-d', '--details', action='store_true',
+    help='Print detailed info for each read pair.')
   parser.add_argument('-p', '--print', action='store_true',
     help='Debug print the alignment as cigarlib sees it.')
   parser.add_argument('-R', '--detailed-read',
@@ -48,27 +56,47 @@ def main(argv):
 
   logging.basicConfig(stream=args.log, level=args.volume, format='%(message)s')
 
-  if args.align:
-    if args.align.suffix == '.bam':
-      align_file = open_bam(args.align)
-    else:
-      align_file = open(args.align)
-  else:
-    align_file = sys.stdin
+  align_file = open_input(args.align)
+
+  summary = True
+  details = False
+  if args.details:
+    details = True
+    if not args.summary:
+      summary = False
 
   if args.print:
     print_alignment(align_file, args.detailed_read)
     return
 
+  stats = print_andor_compile_stats(align_file, args.format, details)
+
+  if summary:
+    print(format_summary_stats(stats, args.format))
+
+
+def print_andor_compile_stats(align_file, format, details):
+  total_bases = 0
+  total_overlap = 0
+  total_errors = 0
   for pair in get_pairs(align_file):
     errors, overlap_len = get_mismatches(pair)
-    print(f'{pair[0].qname}: {len(errors)} errors in {overlap_len}bp', end='')
-    if errors:
-      print(':')
+    total_bases += len(pair[0].seq) + len(pair[1].seq)
+    total_overlap += overlap_len
+    total_errors += len(errors)
+    if details:
+      print(format_read_stats(errors, pair, overlap_len, format=format))
+  return {'bases':total_bases, 'overlap':total_overlap, 'errors':total_errors}
+
+
+def open_input(align_path):
+  if align_path:
+    if align_path.suffix == '.bam':
+      return open_bam(align_path)
     else:
-      print()
-    for error in errors:
-      print(f'{error.ref_coord:4d} {error.type.upper()}: {error.alt1} -> {error.alt2}')
+      return open(align_path)
+  else:
+    return sys.stdin
 
 
 def open_bam(bam_path):
@@ -164,6 +192,42 @@ def get_base_map(read):
   """Return a mapping of reference coordinates to read bases."""
   positions = get_reference_positions(read)
   return dict(zip(positions, read.seq))
+
+
+def format_read_stats(errors, pair, overlap_len, format='tsv'):
+  if format == 'tsv':
+    return format_read_stats_tsv(errors, pair, overlap_len)
+  elif format == 'human':
+    return format_read_stats_human(errors, pair, overlap_len)
+
+
+def format_read_stats_tsv(errors, pair, overlap_len):
+  fields = [pair[0].qname, len(errors), overlap_len]
+  for error in errors:
+    fields.append(error.ref_coord)
+  return '\t'.join(map(str, fields))
+
+
+def format_read_stats_human(errors, pair, overlap_len):
+  output = f'{pair[0].qname}: {len(errors)} errors in {overlap_len}bp'
+  if errors:
+    output += ':'
+  for error in errors:
+    output += f'\n{error.ref_coord:4d} {error.type.upper()}: {error.alt1} -> {error.alt2}'
+  return output
+
+
+def format_summary_stats(stats, format='tsv'):
+  if format == 'tsv':
+    return (
+      '{errors}\t{overlap}\t{bases}\t{}'
+      .format(round(stats['errors']/stats['overlap'], 6), **stats)
+    )
+  elif format == 'human':
+    return (
+      '{} errors per base: {errors} errors in {overlap}bp of overlap and {bases} total bases.'
+      .format(round(stats['errors']/stats['overlap'], 4), **stats)
+    )
 
 
 def print_alignment(align_file, detailed_read=None):
