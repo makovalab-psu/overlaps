@@ -24,8 +24,8 @@ class Error(object):
 
 def make_argparser():
   parser = argparse.ArgumentParser(description=DESCRIPTION)
-  parser.add_argument('align', type=pathlib.Path,
-    help='Name-sorted BAM or SAM file.')
+  parser.add_argument('align', type=pathlib.Path, nargs='?',
+    help='Name-sorted BAM or SAM file. Omit to read from stdin.')
   parser.add_argument('-q', '--mapq', type=int,
     help='Mapping quality threshold. Alignments worse than this MAPQ will be ignored.')
   parser.add_argument('-H', '--human', dest='format', action='store_const', const='human',
@@ -91,13 +91,15 @@ def print_andor_compile_stats(align_file, format, details, mapq_thres):
 
 
 def open_input(align_path):
-  if align_path:
+  if not align_path.is_file():
+    fail(f'Error: Input file must be a regular file. {str(align_path)!r} is not.')
+  if align_path is None or str(align_path) == '-':
+    return sys.stdin
+  else:
     if align_path.suffix == '.bam':
       return open_bam(align_path)
     else:
       return open(align_path)
-  else:
-    return sys.stdin
 
 
 def open_bam(bam_path):
@@ -111,12 +113,12 @@ def get_pairs(align_file, stats, mapq_thres=None):
   last_name = None
   for read in samreader.read(align_file):
     stats['reads'] += 1
-    logging.debug(mated_name(read))
+    # logging.debug(mated_name(read))
     name = read.qname
     assert not (name.endswith('/1') or name.endswith('/2')), name
     mate_num = which_mate(read)
     assert mate_num in (1, 2), read.flag
-    logging.debug(f'pair: {format_pair(pair)}')
+    # logging.debug(f'pair: {format_pair(pair)}')
     if pair[0] is None:
       pair[0] = read
       continue
@@ -159,17 +161,17 @@ def get_mismatches(pair):
   for pos, base1 in zip(positions, read1.seq):
     base2 = base_map.get(pos)
     if pos is None:
-      logging.debug(f'None: {base1} -> <INS>')
+      pass #logging.debug(f'None: {base1} -> <INS>')
     elif base2 is None:
       if started:
-        logging.debug(f'{pos:4d}: {base1} -> <DEL>')
+        pass #logging.debug(f'{pos:4d}: {base1} -> <DEL>')
         #TODO: Oops, insertions don't have a reference position. How to detect them?
         #      Doesn't look like pysam gives an easy way. Looks like more CIGAR parsing.
     else:
       started = True
       overlap_len += 1
       if base1 != base2:
-        logging.debug(f'{pos:4d}: {base1} -> {base2}')
+        pass #logging.debug(f'{pos:4d}: {base1} -> {base2}')
         error = Error(type='snv', rname=read1.qname, ref_coord=pos, alt1=base1, alt2=base2)
         #TODO: Get the read coordinates (coord1, coord2).
         errors.append(error)
@@ -206,16 +208,20 @@ def format_read_stats_human(errors, pair, overlap_len):
 
 
 def format_summary_stats(stats, format='tsv'):
+  error_rate = stats['errors']/stats['overlap']
+  paired_reads = 2*stats['pairs']/stats['reads']
+  overlap_rate = 2*stats['overlap']/stats['bases']
   if format == 'tsv':
     return (
-      '{}\t{errors}\t{overlap}\t{pairs}\t{reads}\t{bases}'
-      .format(round(stats['errors']/stats['overlap'], 6), **stats)
+      '{errors}\t{overlap}\t{pairs}\t{reads}\t{bases}\t{:0.6f}\t{:0.6f}\t{:0.6f}'
+      .format(error_rate, paired_reads, overlap_rate, **stats)
     )
   elif format == 'human':
     return (
-      '{} errors per base: {errors} errors in {overlap}bp of overlap.\n'
-      '{reads} total reads in {pairs} well-mapped pairs totalling {bases} bases (in the pairs).'
-      .format(round(stats['errors']/stats['overlap'], 4), **stats)
+      '{:0.4f} errors per base: {errors} errors in {overlap}bp of overlap.\n'
+      '{:0.3f}% of reads were in well-mapped pairs: {pairs} pairs out of {reads} total reads.\n'
+      'These pairs contained {bases} bases, {:0.4f}% of which were in overlaps.'
+      .format(error_rate, 100*paired_reads, 100*overlap_rate, **stats)
     )
 
 
