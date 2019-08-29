@@ -267,15 +267,21 @@ def mated_name(read):
 
 
 #TODO: Replace with more efficient implementation in cigarlib itself, if necessary.
-#      Take the blocks and compute chunks of coordinates at once.
+#      Maybe take the blocks and compute chunks of coordinates at once.
 def get_reference_positions(read):
   positions = []
   readlen = len(read.seq)
   cigar_list = cigarlib.split_cigar(read.cigar)
   reverse = read_is_reversed(read)
   blocks = cigarlib.get_contiguous_blocks(read.pos, cigar_list, reverse, readlen)
+  # This loop takes 96% of the time spent in this function, and 83% of total script time.
+  # Note: Performance was measured with time.perf_counter() and accumulating elapsed times in a
+  # global dict. These measurement operations took plenty of time themselves: overall, the script
+  # took about 1.9x the normal amount of time.
   for read_coord in range(1, readlen+1):
+    # This takes 42% of the time spent in this function, and 36% of total script time.
     ref_coord = cigarlib.to_ref_coord(blocks, read_coord)
+    # This takes 15% of the time spent in this function, and 13.5% of total script time.
     positions.append(ref_coord)
   if reverse:
     return list(reversed(positions))
