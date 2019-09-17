@@ -24,7 +24,7 @@ class Error(object):
 
 def make_argparser():
   parser = argparse.ArgumentParser(description=DESCRIPTION)
-  parser.add_argument('align', type=pathlib.Path, nargs='?',
+  parser.add_argument('align', type=pathlib.Path, nargs='?', default=sys.stdin,
     help='Name-sorted BAM or SAM file. Omit to read from stdin.')
   parser.add_argument('-q', '--mapq', type=int,
     help='Mapping quality threshold. Alignments worse than this MAPQ will be ignored.')
@@ -71,27 +71,19 @@ def main(argv):
     print_alignment(align_file, args.detailed_read)
     return
 
-  stats = print_andor_compile_stats(align_file, args.format, details, args.mapq)
+  overlapper = Overlapper(align_file)
+  for errors, pair, overlap_len in overlapper.analyze_overlaps(args.mapq):
+    if details:
+      print(format_read_stats(errors, pair, overlap_len, format=args.format))
 
   if summary:
-    print(format_summary_stats(stats, args.format))
-
-
-def print_andor_compile_stats(align_file, format, details, mapq_thres):
-  stats = {'reads':0, 'pairs':0, 'bases':0, 'overlap':0, 'errors':0}
-  for pair in get_pairs(align_file, stats, mapq_thres):
-    errors, overlap_len = get_mismatches(pair)
-    stats['bases'] += len(pair[0].seq) + len(pair[1].seq)
-    stats['overlap'] += overlap_len
-    stats['errors'] += len(errors)
-    stats['pairs'] += 1
-    if details:
-      print(format_read_stats(errors, pair, overlap_len, format=format))
-  return stats
+    print(format_summary_stats(overlapper.stats, args.format))
 
 
 def open_input(align_path):
-  if not align_path.is_file():
+  if align_path is sys.stdin:
+    return align_path
+  elif not align_path.is_file():
     fail(f'Error: Input file must be a regular file. {str(align_path)!r} is not.')
   if align_path is None or str(align_path) == '-':
     return sys.stdin
@@ -108,36 +100,51 @@ def open_bam(bam_path):
     yield str(line, 'utf8')
 
 
-def get_pairs(align_file, stats, mapq_thres=None):
-  pair = [None, None]
-  last_name = None
-  for read in samreader.read(align_file):
-    stats['reads'] += 1
-    # logging.debug(mated_name(read))
-    name = read.qname
-    assert not (name.endswith('/1') or name.endswith('/2')), name
-    mate_num = which_mate(read)
-    assert mate_num in (1, 2), read.flag
-    # logging.debug(f'pair: {format_pair(pair)}')
-    if pair[0] is None:
-      pair[0] = read
-      continue
-    elif pair[1] is None:
-      pair[1] = read
-    else:
-      raise fail(
-        'Error: Invalid state. Encountered a full pair too early. Pair:\n  {}\n  {}'
-        .format(pair[0].qname, pair[1].qname)
-      )
-    # We should only have full pairs at this point.
-    # If the names don't match, the first read can't have a mate in the file, since this is name-
-    # sorted. Discard it, shift the second read to the first position, and loop again.
-    if pair[0].qname != pair[1].qname:
-      pair = [pair[1], None]
-      continue
-    if pair_is_well_mapped(pair, mapq_thres):
-      yield pair
+class Overlapper:
+
+  def __init__(self, align_file):
+    self.align_file = align_file
+    self.stats = {'reads':0, 'pairs':0, 'bases':0, 'overlap':0, 'errors':0}
+
+  def analyze_overlaps(self, mapq_thres=None):
+    for pair in self.get_pairs(mapq_thres=mapq_thres):
+      errors, overlap_len = get_mismatches(pair)
+      self.stats['bases'] += len(pair[0].seq) + len(pair[1].seq)
+      self.stats['overlap'] += overlap_len
+      self.stats['errors'] += len(errors)
+      self.stats['pairs'] += 1
+      yield errors, pair, overlap_len
+
+  def get_pairs(self, mapq_thres=None):
     pair = [None, None]
+    last_name = None
+    for read in samreader.read(self.align_file):
+      self.stats['reads'] += 1
+      # logging.debug(mated_name(read))
+      name = read.qname
+      assert not (name.endswith('/1') or name.endswith('/2')), name
+      mate_num = which_mate(read)
+      assert mate_num in (1, 2), read.flag
+      # logging.debug(f'pair: {format_pair(pair)}')
+      if pair[0] is None:
+        pair[0] = read
+        continue
+      elif pair[1] is None:
+        pair[1] = read
+      else:
+        raise fail(
+          'Error: Invalid state. Encountered a full pair too early. Pair:\n  {}\n  {}'
+          .format(pair[0].qname, pair[1].qname)
+        )
+      # We should only have full pairs at this point.
+      # If the names don't match, the first read can't have a mate in the file, since this is name-
+      # sorted. Discard it, shift the second read to the first position, and loop again.
+      if pair[0].qname != pair[1].qname:
+        pair = [pair[1], None]
+        continue
+      if pair_is_well_mapped(pair, mapq_thres):
+        yield pair
+      pair = [None, None]
 
 
 def pair_is_well_mapped(pair, mapq_thres=None):
@@ -207,22 +214,43 @@ def format_read_stats_human(errors, pair, overlap_len):
   return output
 
 
-def format_summary_stats(stats, format='tsv'):
-  error_rate = stats['errors']/stats['overlap']
-  paired_reads = 2*stats['pairs']/stats['reads']
-  overlap_rate = 2*stats['overlap']/stats['bases']
+def format_summary_stats(stats, format='tsv', precision=6):
+  error_rate = paired_reads = overlap_rate = None
+  if stats['overlap'] > 0:
+    error_rate = round(stats['errors']/stats['overlap'], 6)
+  if stats['reads'] > 0:
+    paired_reads = round(2*stats['pairs']/stats['reads'], 6)
+  if stats['bases'] > 0:
+    overlap_rate = round(2*stats['overlap']/stats['bases'], 6)
   if format == 'tsv':
     return (
-      '{errors}\t{overlap}\t{pairs}\t{reads}\t{bases}\t{:0.6f}\t{:0.6f}\t{:0.6f}'
+      '{errors}\t{overlap}\t{pairs}\t{reads}\t{bases}\t{}\t{}\t{}'
       .format(error_rate, paired_reads, overlap_rate, **stats)
     )
   elif format == 'human':
-    return (
-      '{:0.4f} errors per base: {errors} errors in {overlap}bp of overlap.\n'
-      '{:0.3f}% of reads were in well-mapped pairs: {pairs} pairs out of {reads} total reads.\n'
-      'These pairs contained {bases} bases, {:0.4f}% of which were in overlaps.'
-      .format(error_rate, 100*paired_reads, 100*overlap_rate, **stats)
-    )
+    output = []
+    if stats['overlap'] > 0:
+      output.append(
+        '{:0.4f} errors per base: {errors} errors in {overlap}bp of overlap.'
+        .format(error_rate, **stats)
+      )
+    else:
+      output.append('No overlaps were detected.')
+    if stats['reads'] > 0:
+      output.append(
+        '{:0.3f}% of reads were in well-mapped pairs: {pairs} pairs out of {reads} total reads.'
+        .format(100*paired_reads, **stats)
+      )
+    else:
+      output.append('No reads were found.')
+    if stats['bases'] > 0:
+      output.append(
+        'These pairs contained {bases} bases, {:0.4f}% of which were in overlaps.'
+        .format(100*overlap_rate, **stats)
+      )
+    else:
+      output.append('No paired reads were found.')
+    return '\n'.join(output)
 
 
 def print_alignment(align_file, detailed_read=None):
