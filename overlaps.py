@@ -214,43 +214,55 @@ def format_read_stats_human(errors, pair, overlap_len):
   return output
 
 
-def format_summary_stats(stats, format='tsv', precision=6):
-  error_rate = paired_reads = overlap_rate = None
-  if stats['overlap'] > 0:
-    error_rate = round(stats['errors']/stats['overlap'], 6)
-  if stats['reads'] > 0:
-    paired_reads = round(2*stats['pairs']/stats['reads'], 6)
-  if stats['bases'] > 0:
-    overlap_rate = round(2*stats['overlap']/stats['bases'], 6)
+def format_summary_stats(stats, format='tsv'):
+  add_computed_stats(stats)
   if format == 'tsv':
-    return (
-      '{errors}\t{overlap}\t{pairs}\t{reads}\t{bases}\t{}\t{}\t{}'
-      .format(error_rate, paired_reads, overlap_rate, **stats)
-    )
+    return format_summary_stats_tsv(stats)
   elif format == 'human':
-    output = []
-    if stats['overlap'] > 0:
-      output.append(
-        '{:0.4f} errors per base: {errors} errors in {overlap}bp of overlap.'
-        .format(error_rate, **stats)
-      )
-    else:
-      output.append('No overlaps were detected.')
-    if stats['reads'] > 0:
-      output.append(
-        '{:0.3f}% of reads were in well-mapped pairs: {pairs} pairs out of {reads} total reads.'
-        .format(100*paired_reads, **stats)
-      )
-    else:
-      output.append('No reads were found.')
-    if stats['bases'] > 0:
-      output.append(
-        'These pairs contained {bases} bases, {:0.4f}% of which were in overlaps.'
-        .format(100*overlap_rate, **stats)
-      )
-    else:
-      output.append('No paired reads were found.')
-    return '\n'.join(output)
+    return format_summary_stats_human(stats)
+
+
+def format_summary_stats_tsv(stats):
+  columns = (
+    'errors', 'overlap_bp', 'pairs', 'reads', 'pair_bases', 'error_rate', 'paired_read_frac', 'overlap_rate'
+  )
+  return '\t'.join([str(stats[stat_name]) for stat_name in columns])
+
+
+def format_summary_stats_human(stats):
+  output = []
+  if stats['overlap_bp'] > 0:
+    output.append(
+      '{error_rate:0.4f} errors per base: {errors} errors in {overlap_bp}bp of overlap.'
+      .format(**stats)
+    )
+  else:
+    output.append('No overlaps were detected.')
+  if stats['reads'] > 0:
+    output.append(
+      '{:0.3f}% of reads were in well-mapped pairs: {pairs} pairs out of {reads} total reads.'
+      .format(100*stats['paired_read_frac'], **stats)
+    )
+  else:
+    output.append('No reads were found.')
+  if stats['pair_bases'] > 0:
+    output.append(
+      'These pairs contained {pair_bases} bases, {:0.4f}% of which were in overlaps.'
+      .format(100*stats['overlap_rate'], **stats)
+    )
+  else:
+    output.append('No paired reads were found.')
+  return '\n'.join(output)
+
+
+def add_computed_stats(stats, precision=6):
+  stats.update({'error_rate':None, 'paired_read_frac':None, 'overlap_rate':None})
+  if stats['overlap_bp'] > 0:
+    stats['error_rate'] = round(stats['errors']/stats['overlap_bp'], 6)
+  if stats['reads'] > 0:
+    stats['paired_read_frac'] = round(2*stats['pairs']/stats['reads'], 6)
+  if stats['pair_bases'] > 0:
+    stats['overlap_rate'] = round(2*stats['overlap_bp']/stats['pair_bases'], 6)
 
 
 def print_alignment(align_file, detailed_read=None):
