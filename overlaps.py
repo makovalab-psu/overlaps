@@ -5,6 +5,7 @@ import logging
 import pathlib
 import subprocess
 import sys
+import time
 from bfx import cigarlib
 from bfx import samreader
 assert sys.version_info.major >= 3, 'Python 3 required'
@@ -37,7 +38,11 @@ def make_argparser():
       'Giving --summary AND --details forces both to be printed.')
   parser.add_argument('-d', '--details', action='store_true',
     help='Print detailed info for each read pair.')
-  parser.add_argument('-p', '--print', action='store_true',
+  parser.add_argument('-p', '--progress', type=int, default=15,
+    help='Print periodic updates to stderr while processing large files. Give a number X and this '
+      'will print human-readable stats every X minutes (as well as an initial update X/10 minutes '
+      'in). Give 0 to turn off these messages. Default: %(default)s minutes')
+  parser.add_argument('-P', '--print', action='store_true',
     help='Debug print the alignment as cigarlib sees it.')
   parser.add_argument('-R', '--detailed-read',
     help='When using --print, single out this read and print every reference coordinate of every '
@@ -59,8 +64,8 @@ def main(argv):
 
   logging.basicConfig(stream=args.log, level=args.volume, format='%(message)s')
 
+  # Process arguments.
   align_file = open_input(args.align)
-
   summary = True
   details = False
   if args.details:
@@ -73,12 +78,30 @@ def main(argv):
     return
 
   overlapper = Overlapper(align_file)
-  for errors, pair, overlap_len in overlapper.analyze_overlaps(args.mapq):
-    if details:
-      print(format_read_stats(errors, pair, overlap_len, format=args.format))
+  process_file(overlapper, args.mapq, args.format, details, args.progress)
 
   if summary:
+    if args.progress and args.format == 'human':
+      print('Finished!')
     print(format_summary_stats(overlapper.stats, overlapper.counters, args.format))
+
+
+def process_file(overlapper, mapq_thres, format, details, progress):
+  progress_sec = progress*60
+  start = int(time.time())
+  last = None
+  for errors, pair, overlap_len in overlapper.analyze_overlaps(mapq_thres):
+    if details:
+      print(format_read_stats(errors, pair, overlap_len, format=format))
+    else:
+      print_progress, last = is_progress_time(progress_sec, start, last)
+      if print_progress:
+        output = (
+          '\tProcessed {} reads after {}:\n'
+          .format(overlapper.stats['reads'], human_time(last-start))
+        )
+        output += format_summary_stats(overlapper.stats, overlapper.counters, format)
+        print(output, file=sys.stderr)
 
 
 def open_input(align_path):
@@ -117,6 +140,7 @@ class Overlapper:
       self.stats['pairs'] += 1
       self.counters['overlap_lens'][overlap_len] += 1
       yield errors, pair, overlap_len
+
 
   def get_pairs(self, mapq_thres=None):
     pair = [None, None]
@@ -193,6 +217,21 @@ def get_base_map(read):
   """Return a mapping of reference coordinates to read bases."""
   positions = get_reference_positions(read)
   return dict(zip(positions, read.seq))
+
+
+def is_progress_time(progress_sec, start, last):
+  if progress_sec == 0:
+    return False, 0
+  now = time.time()
+  if last is None:
+    elapsed = now - start
+    if elapsed > progress_sec/10:
+      return True, now
+  else:
+    elapsed = now - last
+    if elapsed > progress_sec:
+      return True, now
+  return False, last
 
 
 def format_read_stats(errors, pair, overlap_len, format='tsv'):
@@ -422,6 +461,36 @@ def read_is_reversed(read):
 
 def mate_is_mapped(read):
   return read.flag & 2
+
+
+def human_time(sec):
+  """Convert a number of seconds into a human-readable quantity of time.
+  Example output: '26.5 minutes', '1.3 months', '5 weeks' (gives an integer if float ends in '.0').
+  """
+  if sec < 60:
+    return format_time(sec, 'second')
+  elif sec < 60*60:
+    return format_time(sec/60, 'minute')
+  elif sec < 24*60*60:
+    return format_time(sec/60/60, 'hour')
+  elif sec < 10*24*60*60:
+    return format_time(sec/60/60/24, 'day')
+  elif sec < 40*24*60*60:
+    return format_time(sec/60/60/24/7, 'week')
+  elif sec < 365*24*60*60:
+    return format_time(sec/60/60/24/30.5, 'month')
+  else:
+    return format_time(sec/60/60/24/365, 'year')
+
+
+def format_time(quantity, unit):
+  rounded = round(quantity, 1)
+  if rounded == int(quantity):
+    rounded = int(quantity)
+  output = f'{rounded} {unit}'
+  if rounded != 1:
+    output += 's'
+  return output
 
 
 def fail(message):
