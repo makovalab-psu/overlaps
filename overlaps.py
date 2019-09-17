@@ -94,11 +94,12 @@ def process_file(overlapper, mapq_thres, format, details, progress):
     if details:
       print(format_read_stats(errors, pair, overlap_len, format=format))
     else:
-      print_progress, last = is_progress_time(progress_sec, start, last)
-      if print_progress:
+      is_progress_time, last = is_it_progress_time(progress_sec, start, last)
+      if is_progress_time:
+        now = int(time.time())
         output = (
           '\tProcessed {} reads after {}:\n'
-          .format(overlapper.stats['reads'], human_time(last-start))
+          .format(overlapper.stats['reads'], human_time(now-start))
         )
         output += format_summary_stats(overlapper.stats, overlapper.counters, format)
         print(output, file=sys.stderr)
@@ -219,15 +220,18 @@ def get_base_map(read):
   return dict(zip(positions, read.seq))
 
 
-def is_progress_time(progress_sec, start, last):
+def is_it_progress_time(progress_sec, start, last):
   if progress_sec == 0:
     return False, 0
   now = time.time()
   if last is None:
+    # We haven't had a progress time yet.
+    # Is it the first progress time?
     elapsed = now - start
     if elapsed > progress_sec/10:
-      return True, now
+      return True, start
   else:
+    # Is it the next progress time?
     elapsed = now - last
     if elapsed > progress_sec:
       return True, now
