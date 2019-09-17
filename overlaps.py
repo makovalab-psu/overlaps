@@ -147,7 +147,7 @@ class Overlapper:
     last_name = None
     for read in samreader.read(self.align_file):
       self.stats['reads'] += 1
-      self.counters['read_lens'][len(read.seq)] += 1
+      self.counters['read_lens'][read.length] += 1
       # logging.debug(mated_name(read))
       name = read.qname
       assert not (name.endswith('/1') or name.endswith('/2')), name
@@ -280,6 +280,7 @@ def format_summary_stats_tsv(stats):
 
 def format_summary_stats_human(stats):
   output = []
+  # Summary stats table.
   if stats['reads'] > 0 or stats['overlap_bp'] > 0:
     output.append('\t\tMinimum\tAverage\tMedian\tMaximum')
   if stats['reads'] > 0:
@@ -292,6 +293,7 @@ def format_summary_stats_human(stats):
     for summary in 'min', 'avg', 'med', 'max':
       line += '\t{}'.format(round(stats[summary+'_overlap'], 3))
     output.append(line)
+    # Start of descriptive text.
     output.append(
       '{error_rate:0.4f} errors per base: {errors} errors in {overlap_bp}bp of overlap.'
       .format(**stats)
