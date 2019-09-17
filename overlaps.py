@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import collections
 import logging
 import pathlib
 import subprocess
@@ -77,7 +78,7 @@ def main(argv):
       print(format_read_stats(errors, pair, overlap_len, format=args.format))
 
   if summary:
-    print(format_summary_stats(overlapper.stats, args.format))
+    print(format_summary_stats(overlapper.stats, overlapper.counters, args.format))
 
 
 def open_input(align_path):
@@ -104,15 +105,17 @@ class Overlapper:
 
   def __init__(self, align_file):
     self.align_file = align_file
-    self.stats = {'reads':0, 'pairs':0, 'bases':0, 'overlap':0, 'errors':0}
+    self.stats = {'reads':0, 'pairs':0, 'pair_bases':0, 'overlap_bp':0, 'errors':0}
+    self.counters = {'overlap_lens':collections.Counter(), 'read_lens':collections.Counter()}
 
   def analyze_overlaps(self, mapq_thres=None):
     for pair in self.get_pairs(mapq_thres=mapq_thres):
       errors, overlap_len = get_mismatches(pair)
-      self.stats['bases'] += len(pair[0].seq) + len(pair[1].seq)
-      self.stats['overlap'] += overlap_len
+      self.stats['pair_bases'] += len(pair[0].seq) + len(pair[1].seq)
+      self.stats['overlap_bp'] += overlap_len
       self.stats['errors'] += len(errors)
       self.stats['pairs'] += 1
+      self.counters['overlap_lens'][overlap_len] += 1
       yield errors, pair, overlap_len
 
   def get_pairs(self, mapq_thres=None):
@@ -120,6 +123,7 @@ class Overlapper:
     last_name = None
     for read in samreader.read(self.align_file):
       self.stats['reads'] += 1
+      self.counters['read_lens'][len(read.seq)] += 1
       # logging.debug(mated_name(read))
       name = read.qname
       assert not (name.endswith('/1') or name.endswith('/2')), name
@@ -214,8 +218,8 @@ def format_read_stats_human(errors, pair, overlap_len):
   return output
 
 
-def format_summary_stats(stats, format='tsv'):
-  add_computed_stats(stats)
+def format_summary_stats(stats, counters, format='tsv'):
+  add_computed_stats(stats, counters)
   if format == 'tsv':
     return format_summary_stats_tsv(stats)
   elif format == 'human':
@@ -223,15 +227,32 @@ def format_summary_stats(stats, format='tsv'):
 
 
 def format_summary_stats_tsv(stats):
-  columns = (
-    'errors', 'overlap_bp', 'pairs', 'reads', 'pair_bases', 'error_rate', 'paired_read_frac', 'overlap_rate'
+  output_stats = (
+    ('min_rlen', 'avg_rlen', 'med_rlen', 'max_rlen'),
+    ('min_overlap', 'avg_overlap', 'med_overlap', 'max_overlap'),
+    ('errors', 'overlap_bp', 'pairs', 'reads', 'pair_bases', 'error_rate', 'paired_read_frac', 'overlap_rate'),
   )
-  return '\t'.join([str(stats[stat_name]) for stat_name in columns])
+  output = []
+  for line_stats in output_stats:
+    line = '\t'.join([str(stats[stat]) for stat in line_stats])
+    output.append(line)
+  return '\n'.join(output)
 
 
 def format_summary_stats_human(stats):
   output = []
+  if stats['reads'] > 0 or stats['overlap_bp'] > 0:
+    output.append('\t\tMinimum\tAverage\tMedian\tMaximum')
+  if stats['reads'] > 0:
+    line = 'Read lengths:'
+    for summary in 'min', 'avg', 'med', 'max':
+      line += '\t{}'.format(round(stats[summary+'_rlen'], 3))
+    output.append(line)
   if stats['overlap_bp'] > 0:
+    line = 'Overlap lens:'
+    for summary in 'min', 'avg', 'med', 'max':
+      line += '\t{}'.format(round(stats[summary+'_overlap'], 3))
+    output.append(line)
     output.append(
       '{error_rate:0.4f} errors per base: {errors} errors in {overlap_bp}bp of overlap.'
       .format(**stats)
@@ -255,14 +276,70 @@ def format_summary_stats_human(stats):
   return '\n'.join(output)
 
 
-def add_computed_stats(stats, precision=6):
-  stats.update({'error_rate':None, 'paired_read_frac':None, 'overlap_rate':None})
+def add_computed_stats(stats, counters, precision=6):
+  for stat in (
+    'error_rate', 'paired_read_frac', 'overlap_rate', 'max_rlen', 'min_rlen', 'avg_rlen', 'med_rlen'
+  ):
+    stats[stat] = None
+  for stat in 'max_overlap', 'min_overlap', 'avg_overlap', 'med_overlap':
+    stats[stat] = 0
   if stats['overlap_bp'] > 0:
     stats['error_rate'] = round(stats['errors']/stats['overlap_bp'], 6)
+    summarize_list(stats, 'overlap', counters['overlap_lens'])
   if stats['reads'] > 0:
     stats['paired_read_frac'] = round(2*stats['pairs']/stats['reads'], 6)
+    summarize_list(stats, 'rlen', counters['read_lens'])
   if stats['pair_bases'] > 0:
     stats['overlap_rate'] = round(2*stats['overlap_bp']/stats['pair_bases'], 6)
+
+
+def summarize_list(stats, datatype, counter, precision=6):
+  summaries = {
+    'max': lambda counter: max(counter.keys()),
+    'min': lambda counter: min(counter.keys()),
+    'avg': get_average,
+    'med': get_median,
+  }
+  for stat_type, summary_fxn in summaries.items():
+    value = round(summary_fxn(counter), precision)
+    stat_name = f'{stat_type}_{datatype}'
+    stats[stat_name] = value
+
+
+def get_average(counter):
+  """Get the average of a series of counts of how often each value occurred."""
+  values_total = 0
+  count_total = 0
+  for value, count in counter.items():
+    values_total += value*count
+    count_total += count
+  if count_total > 0:
+    return values_total/count_total
+  else:
+    return None
+
+
+def get_median(counter):
+  """Get the median from a series of counts of how often each value occurred.
+  This honors the strict definition of a median, returning the average of the middle values
+  if there's an even number of values (and there are different values on either side on the
+  halfway mark)."""
+  total = sum(counter.values())
+  progress = 0
+  last = None
+  avg_with_next = False
+  for value in sorted(counter.keys()):
+    count = counter[value]
+    progress += count
+    if avg_with_next:
+      return (value+last)/2
+    elif progress*2 == total:
+      # There's an even number of values and we just saw the one on one side of the halfway mark.
+      avg_with_next = True
+    elif progress*2 >= total+1:
+      # We just saw the middle value.
+      return value
+    last = value
 
 
 def print_alignment(align_file, detailed_read=None):
