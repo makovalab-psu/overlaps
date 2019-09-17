@@ -82,7 +82,7 @@ def main(argv):
 
   if summary:
     if args.progress and args.format == 'human':
-      print('Finished!')
+      print('Finished!', file=sys.stderr)
     print(format_summary_stats(overlapper.stats, overlapper.counters, args.format))
 
 
