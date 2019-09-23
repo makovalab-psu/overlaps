@@ -10,11 +10,110 @@ from bfx import cigarlib
 from bfx import samreader
 assert sys.version_info.major >= 3, 'Python 3 required'
 
+VALUES_TO_STRS = {None:'.'}
 ERROR_FIELDS = ('type', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2')
 DESCRIPTION = """Use the overlap between paired-end reads to find sequencing errors."""
 
 
-class Error(object):
+class InvalidState(Exception):
+  pass
+
+
+class Pair:
+
+  def __init__(self, first=None, second=None):
+    self._pair = [None, None]
+    self[0] = first
+    self[1] = second
+    self._is_well_mapped = None
+
+  @property
+  def first(self):
+    return self._pair[0]
+
+  @property
+  def second(self):
+    return self._pair[1]
+
+  @first.setter
+  def first(self, value):
+    self[0] = value
+
+  @second.setter
+  def second(self, value):
+    self[1] = value
+
+  @property
+  def is_full(self):
+    if self[0] is None or self[1] is None:
+      return False
+    return True
+
+  @property
+  def num_reads(self):
+    num = 0
+    if self[0] is not None:
+      num += 1
+    if self[1] is not None:
+      num += 1
+    return num
+
+  def __len__(self):
+    return len(self._pair)
+
+  def __getitem__(self, index):
+    return self._pair[index]
+
+  def __setitem__(self, index, value):
+    if value is not None and not isinstance(value, samreader.Alignment):
+      raise ValueError(
+        f'{type(self).__name__} can only hold None or instances of {samreader.Alignment.__name__}.'
+      )
+    self._pair[index] = value
+    self._is_well_mapped = None
+
+  def __repr__(self):
+    return repr(self._pair)
+
+  def __str__(self):
+    return str(self._pair)
+
+  def add(self, value):
+    if self[1] is None:
+      if self[0] is None:
+        self[0] = value
+      else:
+        self[1] = value
+    else:
+      raise InvalidState('Pair is already full.')
+
+  def shift(self):
+    removed = self._pair[0]
+    self._pair = [self._pair[1], None]
+    self._is_well_mapped = None
+    return removed
+
+  def is_well_mapped(self, mapq_thres=None, cached=False):
+    if self._is_well_mapped is None:
+      if cached:
+        raise InvalidState('Cached value of is_well_mapped requested, but none is cached.')
+      self._is_well_mapped = self._is_well_mapped_uncached(mapq_thres=mapq_thres)
+    return self._is_well_mapped
+
+  def _is_well_mapped_uncached(self, mapq_thres=None):
+    read1, read2 = self
+    if read1 is None or read2 is None:
+      return False
+    if not(read1.flag & 2 and read2.flag & 2):
+      return False
+    if read1.rnext is None or read2.rnext is None:
+      return False
+    if mapq_thres is not None and (read1.mapq < mapq_thres or read2.mapq < mapq_thres):
+      return False
+    return True
+
+
+class Error:
   __slots__ = ('type', 'rname', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2')
   defaults = {'type':'snv'}
   def __init__(self, **kwargs):
@@ -136,7 +235,14 @@ class Overlapper:
     self.counters = {'overlap_lens':collections.Counter(), 'read_lens':collections.Counter()}
 
   def analyze_overlaps(self, mapq_thres=None):
-    for pair in self.get_pairs(mapq_thres=mapq_thres):
+    for pair in self.get_pairs(incomplete=True):
+      if not (pair.is_full and pair.is_well_mapped(mapq_thres)):
+        self.stats['reads'] += pair.num_reads
+        for read in pair:
+          if read is not None:
+            self.counters['read_lens'][read.length] += 1
+        yield [], pair, None
+        continue
       errors, overlap_len = get_mismatches(pair)
       self.stats['pair_bases'] += len(pair[0].seq) + len(pair[1].seq)
       self.stats['overlap_bp'] += overlap_len
@@ -146,48 +252,39 @@ class Overlapper:
       yield errors, pair, overlap_len
 
 
-  def get_pairs(self, mapq_thres=None):
-    pair = [None, None]
+  def get_pairs(self, incomplete=False):
+    pair = Pair()
     last_name = None
     for read in samreader.read(self.align_file):
-      self.stats['reads'] += 1
-      self.counters['read_lens'][read.length] += 1
       # logging.debug(mated_name(read))
       name = read.qname
+      if last_name is not None and name < last_name:
+        fail(f'Error: Reads must be sorted by name! Failed on:\n  {last_name}\n  {name}')
+      last_name = name
       assert not (name.endswith('/1') or name.endswith('/2')), name
       mate_num = which_mate(read)
       assert mate_num in (1, 2), read.flag
       # logging.debug(f'pair: {format_pair(pair)}')
-      if pair[0] is None:
-        pair[0] = read
-        continue
-      elif pair[1] is None:
-        pair[1] = read
-      else:
-        raise fail(
+      try:
+        pair.add(read)
+      except InvalidState:
+        fail(
           'Error: Invalid state. Encountered a full pair too early. Pair:\n  {}\n  {}'
           .format(pair[0].qname, pair[1].qname)
         )
-      # We should only have full pairs at this point.
-      # If the names don't match, the first read can't have a mate in the file, since this is name-
-      # sorted. Discard it, shift the second read to the first position, and loop again.
-      if pair[0].qname != pair[1].qname:
-        pair = [pair[1], None]
+      if not pair.is_full:
         continue
-      if pair_is_well_mapped(pair, mapq_thres):
+      # Check the full pairs.
+      if pair[0].qname != pair[1].qname:
+        # If the names don't match, the first read can't have a mate in the file, since this is
+        # name-sorted. Discard it, shift the second read to the first position, and loop again.
+        singleton = pair.shift()
+        if incomplete:
+          yield Pair(singleton)
+      else:
+        # Seems like a properly matched pair. Yield it, and start the next pair.
         yield pair
-      pair = [None, None]
-
-
-def pair_is_well_mapped(pair, mapq_thres=None):
-  read1, read2 = pair
-  if not(read1.flag & 2 and read2.flag & 2):
-    return False
-  if read1.rnext is None or read2.rnext is None:
-    return False
-  if mapq_thres is not None and (read1.mapq < mapq_thres or read2.mapq < mapq_thres):
-    return False
-  return True
+        pair = Pair()
 
 
 def get_mismatches(pair):
@@ -263,20 +360,33 @@ def format_read_stats(errors, pair, overlap_len, format='tsv'):
 
 def format_read_stats_tsv(errors, pair, overlap_len):
   lines = []
-  prefix = [pair[0].qname, str(overlap_len), str(len(errors))]
+  if pair.is_full:
+    read_line = (
+      'pair', pair[0].qname, pair.is_well_mapped(cached=True), pair[0].length,
+      pair[1].length, overlap_len, len(errors)
+    )
+  else:
+    read_line = ('pair', pair[0].qname, False, pair[0].length, None, None, 0)
+  lines.append(read_line)
   for error in errors:
-    error_fields = [str(getattr(error, field)) for field in ERROR_FIELDS]
-    fields = prefix+error_fields
-    lines.append('\t'.join(fields))
-  if lines:
-    return '\n'.join(lines)+'\n'
+    fields = [getattr(error, field) for field in ERROR_FIELDS]
+    lines.append(['error']+fields)
+  output = values_to_tsv(lines)
+  if output:
+    return output+'\n'
   else:
     return ''
 
 
 def format_read_stats_human(errors, pair, overlap_len):
   lines = []
-  first_line = f'{pair[0].qname}: {len(errors)} errors in {overlap_len}bp'
+  if pair.is_full:
+    if pair.is_well_mapped(cached=True):
+      first_line = f'{pair[0].qname}: {len(errors)} errors in {overlap_len}bp'
+    else:
+      first_line = f'{pair[0].qname}: Not well-mapped.'
+  else:
+    first_line = f'{pair[0].qname}: Singleton.'
   if errors:
     first_line += ':'
   lines.append(first_line)
@@ -299,11 +409,18 @@ def format_summary_stats_tsv(stats):
     ('min_overlap', 'avg_overlap', 'med_overlap', 'max_overlap'),
     ('errors', 'overlap_bp', 'pairs', 'reads', 'pair_bases', 'error_rate', 'paired_read_frac', 'overlap_rate'),
   )
-  output = []
+  lines = []
   for line_stats in output_stats:
-    line = '\t'.join([str(stats[stat]) for stat in line_stats])
-    output.append(line)
-  return '\n'.join(output)
+    lines.append([stats[stat] for stat in line_stats])
+  return values_to_tsv(lines)
+
+
+def values_to_tsv(value_lines):
+  str_lines = []
+  for value_line in value_lines:
+    strs = [VALUES_TO_STRS.get(value, str(value)) for value in value_line]
+    str_lines.append('\t'.join(strs))
+  return '\n'.join(str_lines)
 
 
 def format_summary_stats_human(stats):
