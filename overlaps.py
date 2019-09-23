@@ -10,7 +10,9 @@ from bfx import cigarlib
 from bfx import samreader
 assert sys.version_info.major >= 3, 'Python 3 required'
 
-DESCRIPTION = """"""
+ERROR_FIELDS = ('type', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2')
+DESCRIPTION = """Use the overlap between paired-end reads to find sequencing errors."""
+
 
 class Error(object):
   __slots__ = ('type', 'rname', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2')
@@ -37,7 +39,8 @@ def make_argparser():
     help='Print summary stats for the entire file. This is the default, unless --details is given. '
       'Giving --summary AND --details forces both to be printed.')
   parser.add_argument('-d', '--details', action='store_true',
-    help='Print detailed info for each read pair.')
+    help='Print detailed info for each read pair instead of the summary at the end (unless '
+      '--summary is explicitly given).')
   parser.add_argument('-p', '--progress', type=int, default=15,
     help='Print periodic updates to stderr while processing large files. Give a number X and this '
       'will print human-readable stats every X minutes (as well as an initial update X/10 minutes '
@@ -92,7 +95,7 @@ def process_file(overlapper, mapq_thres, format, details, progress):
   last = None
   for errors, pair, overlap_len in overlapper.analyze_overlaps(mapq_thres):
     if details:
-      print(format_read_stats(errors, pair, overlap_len, format=format))
+      print(format_read_stats(errors, pair, overlap_len, format=format), end='')
     else:
       is_progress_time, last = is_it_progress_time(progress_sec, start, last)
       if is_progress_time:
@@ -194,30 +197,43 @@ def get_mismatches(pair):
   base_map = get_base_map(read2)
   positions = get_reference_positions(read1)
   started = False
-  for pos, base1 in zip(positions, read1.seq):
-    base2 = base_map.get(pos)
+  for read1_coord, (base1, pos) in enumerate(zip(read1.seq, positions), start=1):
     if pos is None:
-      pass #logging.debug(f'None: {base1} -> <INS>')
-    elif base2 is None:
-      if started:
-        pass #logging.debug(f'{pos:4d}: {base1} -> <DEL>')
-        #TODO: Oops, insertions don't have a reference position. How to detect them?
-        #      Doesn't look like pysam gives an easy way. Looks like more CIGAR parsing.
-    else:
-      started = True
-      overlap_len += 1
-      if base1 != base2:
-        pass #logging.debug(f'{pos:4d}: {base1} -> {base2}')
-        error = Error(type='snv', rname=read1.qname, ref_coord=pos, alt1=base1, alt2=base2)
-        #TODO: Get the read coordinates (coord1, coord2).
-        errors.append(error)
+      # logging.debug(f'None: {base1} -> <INS>')
+      continue
+    try:
+      base2, read2_coord = base_map[pos]
+    except KeyError:
+      #TODO: Insertions don't have a reference position. How to detect them in read2?
+      # if started:
+      #   logging.debug(f'{pos:4d}: {base1} -> <DEL>')
+      continue
+    started = True
+    overlap_len += 1
+    if base1 != base2:
+      # logging.debug(f'{pos:4d}: {base1} -> {base2}')
+      error = Error(
+          type="snv",
+          rname=read1.qname,
+          coord1=read1_coord,
+          coord2=read2_coord,
+          ref_coord=pos,
+          alt1=base1,
+          alt2=base2,
+      )
+      errors.append(error)
   return errors, overlap_len
 
 
 def get_base_map(read):
-  """Return a mapping of reference coordinates to read bases."""
+  """Return a mapping of reference coordinates to read bases and coordinates.
+  So it returns a dict where each key is `ref_coord` and each value is a tuple of
+  `(read_coord, read_base)`."""
+  base_map = {}
   positions = get_reference_positions(read)
-  return dict(zip(positions, read.seq))
+  for read_coord, (ref_coord, read_base) in enumerate(zip(positions, read.seq), start=1):
+    base_map[ref_coord] = (read_base, read_coord)
+  return base_map
 
 
 def is_it_progress_time(progress_sec, start, last):
@@ -246,19 +262,27 @@ def format_read_stats(errors, pair, overlap_len, format='tsv'):
 
 
 def format_read_stats_tsv(errors, pair, overlap_len):
-  fields = [pair[0].qname, len(errors), overlap_len]
+  lines = []
+  prefix = [pair[0].qname, str(overlap_len), str(len(errors))]
   for error in errors:
-    fields.append(error.ref_coord)
-  return '\t'.join(map(str, fields))
+    error_fields = [str(getattr(error, field)) for field in ERROR_FIELDS]
+    fields = prefix+error_fields
+    lines.append('\t'.join(fields))
+  if lines:
+    return '\n'.join(lines)+'\n'
+  else:
+    return ''
 
 
 def format_read_stats_human(errors, pair, overlap_len):
-  output = f'{pair[0].qname}: {len(errors)} errors in {overlap_len}bp'
+  lines = []
+  first_line = f'{pair[0].qname}: {len(errors)} errors in {overlap_len}bp'
   if errors:
-    output += ':'
+    first_line += ':'
+  lines.append(first_line)
   for error in errors:
-    output += f'\n{error.ref_coord:4d} {error.type.upper()}: {error.alt1} -> {error.alt2}'
-  return output
+    lines.append(f'{error.ref_coord:4d} {error.type.upper()}: {error.alt1} -> {error.alt2}')
+  return '\n'.join(lines)+'\n'
 
 
 def format_summary_stats(stats, counters, format='tsv'):
