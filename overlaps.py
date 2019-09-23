@@ -8,11 +8,34 @@ import sys
 import time
 from bfx import cigarlib
 from bfx import samreader
+from utillib import simplewrap
 assert sys.version_info.major >= 3, 'Python 3 required'
 
 VALUES_TO_STRS = {None:'.'}
 ERROR_FIELDS = ('type', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2')
-DESCRIPTION = """Use the overlap between paired-end reads to find sequencing errors."""
+DESCRIPTION = simplewrap.wrap(f"""Use the overlap between paired-end reads to find sequencing errors.
+Currently only detects SNVs.
+Format of the --details (non--human) output is tab-delimited:
+Null values are indicated by '{VALUES_TO_STRS.get(None, None)}', and boolean values by \
+'{VALUES_TO_STRS.get(True, True)}' and '{VALUES_TO_STRS.get(False, False)}'.
+There are two types of lines. Each line's type is indicated in the first column.
+'pair' lines encode information on each pair of reads. The columns are:
+1. 'pair'
+2. The name of the first read in the pair.
+3. Whether it contains two well-mapped reads (boolean).
+4. Length of the first read.
+5. Length of the second read.
+6. Length of the overlap between the two reads.
+7. How many errors were detected in the overlap.
+'error' lines encode information on each error detected in the overlap of the
+pair described in the preceding 'pair' line. The columns are:
+1. 'error'
+2. The type of error: 'snv', 'ins', or 'del'.
+3. The reference coordinate of the error.
+4. The coordinate of the error in read 1.
+5. The coordinate of the error in read 2.
+6. The allele present in read 1.
+7. The allele present in read 2.""")
 
 
 class InvalidState(Exception):
@@ -126,7 +149,8 @@ class Error:
 
 
 def make_argparser():
-  parser = argparse.ArgumentParser(description=DESCRIPTION)
+  parser = argparse.ArgumentParser(description=DESCRIPTION,
+                                   formatter_class=argparse.RawDescriptionHelpFormatter)
   parser.add_argument('align', type=pathlib.Path, nargs='?', default=sys.stdin,
     help='Name-sorted BAM or SAM file. Omit to read from stdin.')
   parser.add_argument('-q', '--mapq', type=int,
