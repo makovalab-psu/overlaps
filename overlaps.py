@@ -23,8 +23,8 @@ There are two types of lines. Each line's type is indicated in the first column.
 1. 'pair'
 2. The name of the first read in the pair.
 3. Whether it contains two well-mapped reads (boolean).
-4. Length of the first read.
-5. Length of the second read.
+4. Length of the first read. Null if no read 1.
+5. Length of the second read. Null if no read 2.
 6. Length of the overlap between the two reads.
 7. How many errors were detected in the overlap.
 'error' lines encode information on each error detected in the overlap of the
@@ -32,8 +32,8 @@ pair described in the preceding 'pair' line. The columns are:
 1. 'error'
 2. The type of error: 'snv', 'ins', or 'del'.
 3. The reference coordinate of the error.
-4. The coordinate of the error in read 1. Null if no read 1.
-5. The coordinate of the error in read 2. Null if no read 2.
+4. The coordinate of the error in read 1.
+5. The coordinate of the error in read 2.
 6. The allele present in read 1.
 7. The allele present in read 2.""")
 
@@ -319,29 +319,29 @@ def get_mismatches(pair):
   overlap_len = 0
   read1, read2 = pair
   base_map = get_base_map(read2)
-  positions = get_reference_positions(read1)
   started = False
-  for read1_coord, (base1, pos) in enumerate(zip(read1.seq, positions), start=1):
-    if pos is None:
+  read_coords, ref_coords = get_coords(read1)
+  for read1_coord, ref_coord, base1 in zip(read_coords, ref_coords, read1.seq):
+    if ref_coord is None:
       # logging.debug(f'None: {base1} -> <INS>')
       continue
     try:
-      base2, read2_coord = base_map[pos]
+      base2, read2_coord = base_map[ref_coord]
     except KeyError:
       #TODO: Insertions don't have a reference position. How to detect them in read2?
       # if started:
-      #   logging.debug(f'{pos:4d}: {base1} -> <DEL>')
+      #   logging.debug(f'{ref_coord:4d}: {base1} -> <DEL>')
       continue
     started = True
     overlap_len += 1
     if base1 != base2:
-      # logging.debug(f'{pos:4d}: {base1} -> {base2}')
+      # logging.debug(f'{ref_coord:4d}: {base1} -> {base2}')
       error = Error(
           type="snv",
           rname=read1.qname,
           coord1=read1_coord,
           coord2=read2_coord,
-          ref_coord=pos,
+          ref_coord=ref_coord,
           alt1=base1,
           alt2=base2,
       )
@@ -354,13 +354,18 @@ def get_base_map(read):
   So it returns a dict where each key is `ref_coord` and each value is a tuple of
   `(read_coord, read_base)`."""
   base_map = {}
+  read_coords, ref_coords = get_coords(read)
+  for read_coord, ref_coord, read_base in zip(read_coords, ref_coords, read.seq):
+    base_map[ref_coord] = (read_base, read_coord)
+  return base_map
+
+
+def get_coords(read):
   read_coords = range(1, len(read.seq)+1)
   if read.reversed:
     read_coords = reversed(read_coords)
   ref_coords = get_reference_positions(read)
-  for read_coord, ref_coord, read_base in zip(read_coords, ref_coords, read.seq):
-    base_map[ref_coord] = (read_base, read_coord)
-  return base_map
+  return read_coords, ref_coords
 
 
 def is_it_progress_time(progress_sec, start, last):
