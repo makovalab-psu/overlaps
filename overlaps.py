@@ -32,8 +32,8 @@ pair described in the preceding 'pair' line. The columns are:
 1. 'error'
 2. The type of error: 'snv', 'ins', or 'del'.
 3. The reference coordinate of the error.
-4. The coordinate of the error in read 1.
-5. The coordinate of the error in read 2.
+4. The coordinate of the error in read 1. Null if no read 1.
+5. The coordinate of the error in read 2. Null if no read 2.
 6. The allele present in read 1.
 7. The allele present in read 2.""")
 
@@ -127,7 +127,7 @@ class Pair:
     read1, read2 = self
     if read1 is None or read2 is None:
       return False
-    if not(read1.flag & 2 and read2.flag & 2):
+    if not(read1.proper and read2.proper):
       return False
     if read1.rnext is None or read2.rnext is None:
       return False
@@ -286,8 +286,7 @@ class Overlapper:
         fail(f'Error: Reads must be sorted by name! Failed on:\n  {last_name}\n  {name}')
       last_name = name
       assert not (name.endswith('/1') or name.endswith('/2')), name
-      mate_num = which_mate(read)
-      assert mate_num in (1, 2), read.flag
+      assert read.mate in (1, 2), read.flag
       # logging.debug(f'pair: {format_pair(pair)}')
       try:
         pair.add(read)
@@ -351,8 +350,11 @@ def get_base_map(read):
   So it returns a dict where each key is `ref_coord` and each value is a tuple of
   `(read_coord, read_base)`."""
   base_map = {}
-  positions = get_reference_positions(read)
-  for read_coord, (ref_coord, read_base) in enumerate(zip(positions, read.seq), start=1):
+  read_coords = range(1, len(read.seq)+1)
+  if read.reversed:
+    read_coords = reversed(read_coords)
+  ref_coords = get_reference_positions(read)
+  for read_coord, ref_coord, read_base in zip(read_coords, ref_coords, read.seq):
     base_map[ref_coord] = (read_base, read_coord)
   return base_map
 
@@ -590,7 +592,7 @@ def format_pair(pair):
 
 
 def mated_name(read):
-  return f'{read.qname}/{which_mate(read)}'
+  return f'{read.qname}/{read.mate}'
 
 
 #TODO: Replace with more efficient implementation in cigarlib itself, if necessary.
@@ -599,8 +601,7 @@ def get_reference_positions(read):
   positions = []
   readlen = len(read.seq)
   cigar_list = cigarlib.split_cigar(read.cigar)
-  reverse = read_is_reversed(read)
-  blocks = cigarlib.get_contiguous_blocks(read.pos, cigar_list, reverse, readlen)
+  blocks = cigarlib.get_contiguous_blocks(read.pos, cigar_list, read.reversed, readlen)
   # This loop takes 96% of the time spent in this function, and 83% of total script time.
   # Note: Performance was measured with time.perf_counter() and accumulating elapsed times in a
   # global dict. These measurement operations took plenty of time themselves: overall, the script
@@ -610,28 +611,10 @@ def get_reference_positions(read):
     ref_coord = cigarlib.to_ref_coord(blocks, read_coord)
     # This takes 15% of the time spent in this function, and 13.5% of total script time.
     positions.append(ref_coord)
-  if reverse:
+  if read.reversed:
     return list(reversed(positions))
   else:
     return positions
-
-
-def which_mate(read):
-  if read.flag & 64:
-    return 1
-  elif read.flag & 128:
-    return 2
-
-
-def read_is_reversed(read):
-  if read.flag & 16:
-    return True
-  else:
-    return False
-
-
-def mate_is_mapped(read):
-  return read.flag & 2
 
 
 def human_time(sec):
