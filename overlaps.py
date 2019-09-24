@@ -286,7 +286,7 @@ class Overlapper:
     for read in samreader.read(self.align_file):
       # logging.debug(mated_name(read))
       name = read.qname
-      if last_name is not None and name < last_name:
+      if self.check_order and last_name is not None and name < last_name:
         fail(f'Error: Reads must be sorted by name! Failed on:\n  {last_name}\n  {name}')
       last_name = name
       assert not (name.endswith('/1') or name.endswith('/2')), name
