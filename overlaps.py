@@ -168,6 +168,9 @@ def make_argparser():
     help='Print periodic updates to stderr while processing large files. Give a number X and this '
       'will print human-readable stats every X minutes (as well as an initial update X/10 minutes '
       'in). Give 0 to turn off these messages. Default: %(default)s minutes')
+  parser.add_argument('-S', '--check-order', action='store_true',
+    help="Validate that the input is name-sorted, according to Python's version of lexicographic "
+      'ordering. This will cause the script to fail if a read is discovered out of order.')
   parser.add_argument('-P', '--print', action='store_true',
     help='Debug print the alignment as cigarlib sees it.')
   parser.add_argument('-R', '--detailed-read',
@@ -203,7 +206,7 @@ def main(argv):
     print_alignment(align_file, args.detailed_read)
     return
 
-  overlapper = Overlapper(align_file)
+  overlapper = Overlapper(align_file, check_order=args.check_order)
   process_file(overlapper, args.mapq, args.format, details, args.progress)
 
   if summary:
@@ -253,8 +256,9 @@ def open_bam(bam_path):
 
 class Overlapper:
 
-  def __init__(self, align_file):
+  def __init__(self, align_file, check_order=False):
     self.align_file = align_file
+    self.check_order = check_order
     self.stats = {'reads':0, 'pairs':0, 'pair_bases':0, 'overlap_bp':0, 'errors':0}
     self.counters = {'overlap_lens':collections.Counter(), 'read_lens':collections.Counter()}
 
