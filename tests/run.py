@@ -88,14 +88,17 @@ def overlapper(test_name):
   output_name = 'overlap.details.out.tsv'
   print(f'{test_name} ::: {script_name} ::: {input_name}\t', end='')
   cmd = (script, '--details', TESTS_DIR/input_name)
-  result = run_command_and_capture(cmd, onerror='stderr')
-  expected = read_file(TESTS_DIR/output_name)
-  if result != expected:
+  result, exit_code = run_command_and_capture(cmd, onerror='stderr')
+  if exit_code != 0:
     print('FAILED')
-    for line in trimmed_diff(expected.splitlines(), result.splitlines()):
-      print(line)
   else:
-    print('success')
+    expected = read_file(TESTS_DIR/output_name)
+    if result != expected:
+      print('FAILED')
+      for line in trimmed_diff(expected.splitlines(), result.splitlines()):
+        print(line)
+    else:
+      print('success')
 
 
 GlobalsAfterActive = globals().copy()
@@ -154,7 +157,7 @@ def run_command_and_capture(command, onerror='warn'):
   )
   if result.returncode != 0 and onerror == 'stderr':
     logging.error(str(result.stderr, 'utf8'))
-  return str(result.stdout, 'utf8')
+  return str(result.stdout, 'utf8'), result.returncode
 
 
 def run_command_and_catch(command, onerror='warn', **kwargs):
