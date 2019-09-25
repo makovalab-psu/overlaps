@@ -7,7 +7,7 @@ assert sys.version_info.major >= 3, 'Python 3 required'
 
 BINS = 10
 NULL_STR = '.'
-DESCRIPTION = """"""
+DESCRIPTION = """Analyze the output of overlaps.py --details and print summary statistics."""
 
 
 def make_argparser():
@@ -15,7 +15,12 @@ def make_argparser():
   options = parser.add_argument_group('Options')
   options.add_argument(
     '-e', '--errors', action='append', nargs=2, metavar=('name', 'errors.tsv'), required=True,
-    help='')
+    help='The errors output by overlaps.py --details. Give a sample name and the path to the '
+      'errors file. Use --errors once for each sample.')
+  options.add_argument('-t', '--tsv', action='store_const', dest='format', const='tsv', default='human',
+    help='Output the raw data in tab-delimited format.')
+  options.add_argument('-m', '--min-errors', type=int, default=1000,
+    help='Minimum number of errors that must be present in a bin in order to output an error rate.')
   options.add_argument('-h', '--help', action='help',
     help='Print this argument help text and exit.')
   logs = parser.add_argument_group('Logging')
@@ -46,8 +51,11 @@ def main(argv):
     logging.warning(f'Info: Processing sample {sample}..')
     metastats[sample] = compile_stats(parse_errors(errors_path))
 
-  table = make_table(metastats)
-  print(format_table(table, spacing=2))
+  if args.format == 'tsv':
+    print(format_tsv(make_tsv_data(metastats)))
+  if args.format == 'human':
+    table = make_table_data(metastats, min_errors=args.min_errors)
+    print(format_table(table, spacing=2))
 
 
 def parse_errors(path):
@@ -194,7 +202,41 @@ def bin_overlap(overlap, readlen, total_bins=BINS):
   return overlap_binned
 
 
-def make_table(metastats, min_errors=1000):
+def make_tsv_data(metastats):
+  rows = []
+  for sample, stats in metastats.items():
+    overlap_row = [sample, 'overlaps', stats['overlap']] + [int(o) for o in stats['overlap_binned']]
+    rows.append(overlap_row)
+    errors_row = [sample, 'errors', stats['errors']] + stats['errors_binned']
+    rows.append(errors_row)
+    rates = []
+    for errors,  overlaps in zip(stats['errors_binned'], stats['overlap_binned']):
+      if overlaps > 0:
+        rates.append(100*errors/overlaps)
+      else:
+        rates.append(None)
+    rates_row = [sample, 'rates', 100*stats['errors']/stats['overlap']] + rates
+    rows.append(rates_row)
+  return rows
+
+
+def format_tsv(rows):
+  lines = []
+  for row in rows:
+    lines.append('\t'.join(map(format_value, row)))
+  return '\n'.join(lines)
+
+
+def format_value(value):
+  if value is None:
+    return NULL_STR
+  elif isinstance(value, float):
+    return f'{value:0.5f}'
+  else:
+    return str(value)
+
+
+def make_table_data(metastats, min_errors=1000):
   rows = []
   total_bins = len(list(metastats.values())[0]['errors_binned'])
   header1 = ['',      'Total',  'Total',   'Error']
