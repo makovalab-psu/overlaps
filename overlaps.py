@@ -129,6 +129,7 @@ class Pair:
     for read in self:
       if not self._read_is_well_mapped(read, mapq_thres=mapq_thres):
         return False
+    return True
 
   GOOD_FLAGS = 1 | 2
   BAD_FLAGS = 4 | 8 | 256 | 512 | 1024 | 2048
@@ -238,8 +239,7 @@ def process_file(overlapper, mapq_thres, format, details, progress):
       if is_progress_time:
         now = int(time.time())
         output = (
-          '\tProcessed {} reads after {}:\n'
-          .format(overlapper.stats['reads'], human_time(now-start))
+          f'\tProcessed {overlapper.stats["reads"]} reads after {human_time(now-start)}:\n'
         )
         output += format_summary_stats(overlapper.stats, overlapper.counters, format)
         print(output, file=sys.stderr)
@@ -275,11 +275,11 @@ class Overlapper:
 
   def analyze_overlaps(self, mapq_thres=None):
     for pair in self.get_pairs(incomplete=True):
+      self.stats['reads'] += pair.num_reads
+      for read in pair:
+        if read is not None:
+          self.counters['read_lens'][read.length] += 1
       if not (pair.is_full and pair.is_well_mapped(mapq_thres)):
-        self.stats['reads'] += pair.num_reads
-        for read in pair:
-          if read is not None:
-            self.counters['read_lens'][read.length] += 1
         yield [], pair, None
         continue
       errors, overlap_len = get_mismatches(pair)
