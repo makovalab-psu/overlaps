@@ -48,7 +48,7 @@ class Pair:
     self._pair = [None, None]
     self[0] = first
     self[1] = second
-    self._is_well_mapped = None
+    self._is_well_mapped_cache = None
 
   @property
   def first(self):
@@ -68,6 +68,7 @@ class Pair:
 
   @property
   def is_full(self):
+    """Are both slots in this pair filled with reads?"""
     if self[0] is None or self[1] is None:
       return False
     return True
@@ -93,7 +94,7 @@ class Pair:
         f'{type(self).__name__} can only hold None or instances of {samreader.Alignment.__name__}.'
       )
     self._pair[index] = value
-    self._is_well_mapped = None
+    self._is_well_mapped_cache = None
 
   def __repr__(self):
     return repr(self._pair)
@@ -113,25 +114,35 @@ class Pair:
   def shift(self):
     removed = self._pair[0]
     self._pair = [self._pair[1], None]
-    self._is_well_mapped = None
+    self._is_well_mapped_cache = None
     return removed
 
   def is_well_mapped(self, mapq_thres=None, cached=False):
-    if self._is_well_mapped is None:
+    if self._is_well_mapped_cache is None:
       if cached:
-        raise InvalidState('Cached value of is_well_mapped requested, but none is cached.')
-      self._is_well_mapped = self._is_well_mapped_uncached(mapq_thres=mapq_thres)
-    return self._is_well_mapped
+        logging.warning('Warning: Cached value of is_well_mapped requested, but none is cached.')
+        return None
+      self._is_well_mapped_cache = self._is_well_mapped(mapq_thres=mapq_thres)
+    return self._is_well_mapped_cache
 
-  def _is_well_mapped_uncached(self, mapq_thres=None):
-    read1, read2 = self
-    if read1 is None or read2 is None:
+  def _is_well_mapped(self, mapq_thres=None):
+    for read in self:
+      if not self._read_is_well_mapped(read, mapq_thres=mapq_thres):
+        return False
+
+  GOOD_FLAGS = 1 | 2
+  BAD_FLAGS = 4 | 8 | 256 | 512 | 1024 | 2048
+  @classmethod
+  def _read_is_well_mapped(cls, read, mapq_thres=None):
+    if read is None:
       return False
-    if not(read1.proper and read2.proper):
+    if read.rnext is None:
       return False
-    if read1.rnext is None or read2.rnext is None:
+    if read.flag & cls.GOOD_FLAGS != cls.GOOD_FLAGS:
       return False
-    if mapq_thres is not None and (read1.mapq < mapq_thres or read2.mapq < mapq_thres):
+    if read.flag & cls.BAD_FLAGS:
+      return False
+    if mapq_thres is not None and read.mapq < mapq_thres:
       return False
     return True
 
