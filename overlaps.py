@@ -38,128 +38,6 @@ pair described in the preceding 'pair' line. The columns are:
 7. The allele present in read 2.""")
 
 
-class InvalidState(Exception):
-  pass
-
-
-class Pair:
-
-  def __init__(self, first=None, second=None):
-    self._pair = [None, None]
-    self[0] = first
-    self[1] = second
-    self._is_well_mapped_cache = None
-
-  @property
-  def first(self):
-    return self._pair[0]
-
-  @property
-  def second(self):
-    return self._pair[1]
-
-  @first.setter
-  def first(self, value):
-    self[0] = value
-
-  @second.setter
-  def second(self, value):
-    self[1] = value
-
-  @property
-  def is_full(self):
-    """Are both slots in this pair filled with reads?"""
-    if self[0] is None or self[1] is None:
-      return False
-    return True
-
-  @property
-  def num_reads(self):
-    num = 0
-    if self[0] is not None:
-      num += 1
-    if self[1] is not None:
-      num += 1
-    return num
-
-  def __len__(self):
-    return len(self._pair)
-
-  def __getitem__(self, index):
-    return self._pair[index]
-
-  def __setitem__(self, index, value):
-    if value is not None and not isinstance(value, samreader.Alignment):
-      raise ValueError(
-        f'{type(self).__name__} can only hold None or instances of {samreader.Alignment.__name__}.'
-      )
-    self._pair[index] = value
-    self._is_well_mapped_cache = None
-
-  def __repr__(self):
-    return repr(self._pair)
-
-  def __str__(self):
-    return str(self._pair)
-
-  def add(self, value):
-    if self[1] is None:
-      if self[0] is None:
-        self[0] = value
-      else:
-        self[1] = value
-    else:
-      raise InvalidState('Pair is already full.')
-
-  def shift(self):
-    removed = self._pair[0]
-    self._pair = [self._pair[1], None]
-    self._is_well_mapped_cache = None
-    return removed
-
-  def is_well_mapped(self, mapq_thres=None, cached=False):
-    if self._is_well_mapped_cache is None:
-      if cached:
-        logging.warning('Warning: Cached value of is_well_mapped requested, but none is cached.')
-        return None
-      self._is_well_mapped_cache = self._is_well_mapped(mapq_thres=mapq_thres)
-    return self._is_well_mapped_cache
-
-  def _is_well_mapped(self, mapq_thres=None):
-    for read in self:
-      if not self._read_is_well_mapped(read, mapq_thres=mapq_thres):
-        return False
-    return True
-
-  GOOD_FLAGS = 1 | 2
-  BAD_FLAGS = 4 | 8 | 256 | 512 | 1024 | 2048
-  @classmethod
-  def _read_is_well_mapped(cls, read, mapq_thres=None):
-    if read is None:
-      return False
-    if read.rnext is None:
-      return False
-    if read.flag & cls.GOOD_FLAGS != cls.GOOD_FLAGS:
-      return False
-    if read.flag & cls.BAD_FLAGS:
-      return False
-    if mapq_thres is not None and read.mapq < mapq_thres:
-      return False
-    return True
-
-
-class Error:
-  __slots__ = ('type', 'rname', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2')
-  defaults = {'type':'snv'}
-  def __init__(self, **kwargs):
-    for name in self.__slots__:
-      if name in kwargs:
-        setattr(self, name, kwargs[name])
-      else:
-        default = self.defaults.get(name, None)
-        setattr(self, name, default)
-
-
 def make_argparser():
   parser = argparse.ArgumentParser(description=DESCRIPTION,
                                    formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -673,6 +551,128 @@ def fail(message):
     sys.exit(1)
   else:
     raise Exception('Unrecoverable error')
+
+
+class InvalidState(Exception):
+  pass
+
+
+class Pair:
+
+  def __init__(self, first=None, second=None):
+    self._pair = [None, None]
+    self[0] = first
+    self[1] = second
+    self._is_well_mapped_cache = None
+
+  @property
+  def first(self):
+    return self._pair[0]
+
+  @property
+  def second(self):
+    return self._pair[1]
+
+  @first.setter
+  def first(self, value):
+    self[0] = value
+
+  @second.setter
+  def second(self, value):
+    self[1] = value
+
+  @property
+  def is_full(self):
+    """Are both slots in this pair filled with reads?"""
+    if self[0] is None or self[1] is None:
+      return False
+    return True
+
+  @property
+  def num_reads(self):
+    num = 0
+    if self[0] is not None:
+      num += 1
+    if self[1] is not None:
+      num += 1
+    return num
+
+  def __len__(self):
+    return len(self._pair)
+
+  def __getitem__(self, index):
+    return self._pair[index]
+
+  def __setitem__(self, index, value):
+    if value is not None and not isinstance(value, samreader.Alignment):
+      raise ValueError(
+        f'{type(self).__name__} can only hold None or instances of {samreader.Alignment.__name__}.'
+      )
+    self._pair[index] = value
+    self._is_well_mapped_cache = None
+
+  def __repr__(self):
+    return repr(self._pair)
+
+  def __str__(self):
+    return str(self._pair)
+
+  def add(self, value):
+    if self[1] is None:
+      if self[0] is None:
+        self[0] = value
+      else:
+        self[1] = value
+    else:
+      raise InvalidState('Pair is already full.')
+
+  def shift(self):
+    removed = self._pair[0]
+    self._pair = [self._pair[1], None]
+    self._is_well_mapped_cache = None
+    return removed
+
+  def is_well_mapped(self, mapq_thres=None, cached=False):
+    if self._is_well_mapped_cache is None:
+      if cached:
+        logging.warning('Warning: Cached value of is_well_mapped requested, but none is cached.')
+        return None
+      self._is_well_mapped_cache = self._is_well_mapped(mapq_thres=mapq_thres)
+    return self._is_well_mapped_cache
+
+  def _is_well_mapped(self, mapq_thres=None):
+    for read in self:
+      if not self._read_is_well_mapped(read, mapq_thres=mapq_thres):
+        return False
+    return True
+
+  GOOD_FLAGS = 1 | 2
+  BAD_FLAGS = 4 | 8 | 256 | 512 | 1024 | 2048
+  @classmethod
+  def _read_is_well_mapped(cls, read, mapq_thres=None):
+    if read is None:
+      return False
+    if read.rnext is None:
+      return False
+    if read.flag & cls.GOOD_FLAGS != cls.GOOD_FLAGS:
+      return False
+    if read.flag & cls.BAD_FLAGS:
+      return False
+    if mapq_thres is not None and read.mapq < mapq_thres:
+      return False
+    return True
+
+
+class Error:
+  __slots__ = ('type', 'rname', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2')
+  defaults = {'type':'snv'}
+  def __init__(self, **kwargs):
+    for name in self.__slots__:
+      if name in kwargs:
+        setattr(self, name, kwargs[name])
+      else:
+        default = self.defaults.get(name, None)
+        setattr(self, name, default)
 
 
 if __name__ == '__main__':
