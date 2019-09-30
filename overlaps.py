@@ -124,7 +124,7 @@ def process_file(overlapper, mapq_thres, format, details, progress, file=sys.std
           f'\tProcessed {overlapper.stats["reads"]} reads after {human_time(now-start)}:\n'
         )
         output += format_summary_stats(overlapper.stats, overlapper.counters, format)
-        print(output, file=file)
+        print(output, file=sys.stderr)
 
 
 def open_input(align_path):
