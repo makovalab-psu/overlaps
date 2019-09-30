@@ -120,11 +120,10 @@ def process_file(overlapper, mapq_thres, format, details, progress, file=sys.std
       is_progress_time, last = is_it_progress_time(progress_sec, start, last)
       if is_progress_time:
         now = int(time.time())
-        output = (
-          f'\tProcessed {overlapper.stats["reads"]} reads after {human_time(now-start)}:\n'
-        )
+        output = f'\tProcessed {overlapper.stats["reads"]} reads after {human_time(now-start)}:\n'
         output += format_summary_stats(overlapper.stats, overlapper.counters, format)
         print(output, file=sys.stderr)
+        sys.stderr.flush()
 
 
 def open_input(align_path):
