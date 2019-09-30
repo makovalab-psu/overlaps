@@ -39,10 +39,14 @@ pair described in the preceding 'pair' line. The columns are:
 
 
 def make_argparser():
-  parser = argparse.ArgumentParser(description=DESCRIPTION,
-                                   formatter_class=argparse.RawDescriptionHelpFormatter)
+  parser = argparse.ArgumentParser(
+    description=DESCRIPTION, formatter_class=argparse.RawDescriptionHelpFormatter
+  )
   parser.add_argument('align', type=pathlib.Path, nargs='?', default=sys.stdin,
     help='Name-sorted BAM or SAM file. Omit to read from stdin.')
+  parser.add_argument('-o', '--output', type=argparse.FileType('w'), default=sys.stdout,
+    help='Print output to this file instead of stdout. Warning: If the file already exists, it '
+      'will be overwritten.')
   parser.add_argument('-q', '--mapq', type=int,
     help='Mapping quality threshold. Alignments worse than this MAPQ will be ignored.')
   parser.add_argument('-H', '--human', dest='format', action='store_const', const='human',
@@ -97,21 +101,21 @@ def main(argv):
     return
 
   overlapper = Overlapper(align_file, check_order=args.check_order)
-  process_file(overlapper, args.mapq, args.format, details, args.progress)
+  process_file(overlapper, args.mapq, args.format, details, args.progress, file=args.output)
 
   if summary:
     if args.progress and args.format == 'human':
       print('Finished!', file=sys.stderr)
-    print(format_summary_stats(overlapper.stats, overlapper.counters, args.format))
+    print(format_summary_stats(overlapper.stats, overlapper.counters, args.format), file=args.output)
 
 
-def process_file(overlapper, mapq_thres, format, details, progress):
+def process_file(overlapper, mapq_thres, format, details, progress, file=sys.stdout):
   progress_sec = progress*60
   start = int(time.time())
   last = None
   for errors, pair, overlap_len in overlapper.analyze_overlaps(mapq_thres):
     if details:
-      print(format_read_stats(errors, pair, overlap_len, format=format), end='')
+      print(format_read_stats(errors, pair, overlap_len, format=format), end='', file=file)
     else:
       is_progress_time, last = is_it_progress_time(progress_sec, start, last)
       if is_progress_time:
@@ -120,7 +124,7 @@ def process_file(overlapper, mapq_thres, format, details, progress):
           f'\tProcessed {overlapper.stats["reads"]} reads after {human_time(now-start)}:\n'
         )
         output += format_summary_stats(overlapper.stats, overlapper.counters, format)
-        print(output, file=sys.stderr)
+        print(output, file=file)
 
 
 def open_input(align_path):
