@@ -103,7 +103,10 @@ def main(argv: List[str]) -> int:
   align(ref_path, args.fastq1, args.fastq2, out_path, threads=args.threads)
 
   if not args.keep_tmp:
-    os.remove(align_tmp_path)
+    align_tmp_bai_path = Path(str(align_tmp_path)+'.bai')
+    for path in (align_tmp_path, align_tmp_bai_path):
+      if path.is_file():
+        os.remove(path)
 
 
 def get_reads_base(reads_path: Path) -> str:
