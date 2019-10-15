@@ -47,7 +47,7 @@ def make_argparser():
   parser.add_argument('-o', '--output', type=argparse.FileType('w'), default=sys.stdout,
     help='Print output to this file instead of stdout. Warning: If the file already exists, it '
       'will be overwritten.')
-  parser.add_argument('-q', '--mapq', type=int,
+  parser.add_argument('-m', '--mapq', type=int,
     help='Mapping quality threshold. Alignments worse than this MAPQ will be ignored.')
   parser.add_argument('-H', '--human', dest='format', action='store_const', const='human',
     default='tsv',
@@ -58,6 +58,9 @@ def make_argparser():
   parser.add_argument('-d', '--details', action='store_true',
     help='Print detailed info for each read pair instead of the summary at the end (unless '
       '--summary is explicitly given).')
+  parser.add_argument('-O', '--output2', nargs=2, metavar=('{summary,details}', 'PATH/TO/FILE.TXT'),
+    help='Print another stream of output to this file. Indicate whether to print "summary" or '
+      '"details", and the path to print it to.')
   parser.add_argument('-p', '--progress', type=int, default=15,
     help='Print periodic updates to stderr while processing large files. Give a number X and this '
       'will print human-readable stats every X minutes (as well as an initial update X/10 minutes '
@@ -89,32 +92,40 @@ def main(argv):
 
   # Process arguments.
   align_file = open_input(args.align)
-  summary = True
-  details = False
+  summary_files = [args.output]
+  details_files = []
   if args.details:
-    details = True
+    details_files.append(args.output)
     if not args.summary:
-      summary = False
+      summary_files = []
+  if args.output2:
+    if args.output2[0] == 'details':
+      details_files.append(open(args.output2[1], 'w'))
+    elif args.output2[1] == 'summary':
+      summary_files.append(open(args.output2[1], 'w'))
+    else:
+      fail(f'Invalid --output2 type {args.output2[1]!r}.')
 
   if args.print:
     print_alignment(align_file, args.detailed_read)
     return
 
   overlapper = Overlapper(align_file, check_order=args.check_order)
-  process_file(overlapper, args.mapq, args.format, details, args.progress, file=args.output)
+  process_file(overlapper, args.mapq, args.format, details_files, args.progress)
 
-  if summary:
+  if summary_files:
     if args.progress and args.format == 'human':
       print('Finished!', file=sys.stderr)
-    print(format_summary_stats(overlapper.stats, overlapper.counters, args.format), file=args.output)
+    for file in summary_files:
+      print(format_summary_stats(overlapper.stats, overlapper.counters, args.format), file=file)
 
 
-def process_file(overlapper, mapq_thres, format, details, progress, file=sys.stdout):
+def process_file(overlapper, mapq_thres, format, details_files, progress):
   progress_sec = progress*60
   start = int(time.time())
   last = None
   for errors, pair, overlap_len in overlapper.analyze_overlaps(mapq_thres):
-    if details:
+    for file in details_files:
       print(format_read_stats(errors, pair, overlap_len, format=format), end='', file=file)
     is_progress_time, last = is_it_progress_time(progress_sec, start, last)
     if is_progress_time:
@@ -129,7 +140,7 @@ def open_input(align_path):
   if align_path is sys.stdin:
     return align_path
   elif not align_path.is_file():
-    fail(f'Error: Input file must be a regular file. {str(align_path)!r} is not.')
+    fail(f'Input file must be a regular file. {str(align_path)!r} is not.')
   if align_path is None or str(align_path) == '-':
     return sys.stdin
   else:
@@ -178,7 +189,7 @@ class Overlapper:
       # logging.debug(mated_name(read))
       name = read.qname
       if self.check_order and last_name is not None and name < last_name:
-        fail(f'Error: Reads must be sorted by name! Failed on:\n  {last_name}\n  {name}')
+        fail(f'Reads must be sorted by name! Failed on:\n  {last_name}\n  {name}')
       last_name = name
       assert not (name.endswith('/1') or name.endswith('/2')), name
       assert read.mate in (1, 2), read.flag
@@ -187,7 +198,7 @@ class Overlapper:
         pair.add(read)
       except InvalidState:
         fail(
-          'Error: Invalid state. Encountered a full pair too early. Pair:\n  {}\n  {}'
+          'Invalid state. Encountered a full pair too early. Pair:\n  {}\n  {}'
           .format(pair[0].qname, pair[1].qname)
         )
       if not pair.is_full:
@@ -548,7 +559,7 @@ def format_time(quantity, unit):
 
 
 def fail(message):
-  logging.critical(message)
+  logging.critical('Error: '+message)
   if __name__ == '__main__':
     sys.exit(1)
   else:
