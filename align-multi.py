@@ -9,7 +9,7 @@ from pathlib import Path
 import random
 import subprocess
 import sys
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Union
 from bfx import samreader
 assert sys.version_info.major >= 3, 'Python 3 required'
 
@@ -25,17 +25,17 @@ Then it will do another alignment against that reference only."""
 def make_argparser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(add_help=False, description=DESCRIPTION)
   io = parser.add_argument_group('I/O')
+  io.add_argument('seqs_to_refs', type=Path,
+    help='File mapping sequence names to reference files. Should contain one line per sequence, '
+      'with two tab-delimited columns: the sequence name, and the path to the reference file. '
+      'If --refs is given, the path will be interpreted as a relative path under the --refs '
+      'directory.')
   io.add_argument('meta_ref', type=Path,
     help='Meta-reference file containing all possible sequences.')
   io.add_argument('fastq1', type=Path,
     help='Input reads, mate 1')
   io.add_argument('fastq2', type=Path,
     help='Input reads, mate 2')
-  io.add_argument('seqs_to_refs', type=Path,
-    help='File mapping sequence names to reference files. Should contain one line per sequence, '
-      'with two tab-delimited columns: the sequence name, and the path to the reference file. '
-      'If --refs is given, the path will be interpreted as a relative path under the --refs '
-      'directory.')
   io.add_argument('-o', '--output', type=Path,
     help='Write the output BAM to this file. Default: choose a filename based on the first fastq '
       'file.')
@@ -108,6 +108,8 @@ def main(argv: List[str]) -> int:
       if path.is_file():
         os.remove(path)
 
+  return 0
+
 
 def get_reads_base(reads_path: Path) -> str:
   """Get the basename of a file, omitting any `_1` or `_2` before the extension.
@@ -154,7 +156,7 @@ def read_map(map_path: Path) -> Tuple[Dict[str,str], Dict[str,int]]:
 
 
 def count_alignments(align_path: Path, mapq_thres: int=None) -> collections.Counter:
-  aln_counts = collections.Counter()
+  aln_counts: collections.Counter = collections.Counter()
   proc = subprocess.Popen(('samtools', 'view', align_path), text=True, stdout=subprocess.PIPE)
   for aln in samreader.read(proc.stdout):
     if is_good_alignment(aln, mapq_thres):
@@ -170,7 +172,7 @@ def write_ref_counts(aln_counts: collections.Counter, ref_counts_path: Path) -> 
 
 def get_best_seq(
     aln_counts: collections.Counter, seq_sizes: Dict[str,int], min_size: int=None
-) -> str:
+) -> Union[str, None]:
   for seq_name, count in sorted(aln_counts.items(), reverse=True, key=lambda item: item[1]):
     if min_size is None or seq_sizes[seq_name] >= min_size:
       return seq_name
