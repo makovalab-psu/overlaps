@@ -24,23 +24,28 @@ Then it will do another alignment against that reference only."""
 
 def make_argparser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(add_help=False, description=DESCRIPTION)
-  options = parser.add_argument_group('Options')
-  options.add_argument('meta_ref', type=Path,
+  io = parser.add_argument_group('I/O')
+  io.add_argument('meta_ref', type=Path,
     help='Meta-reference file containing all possible sequences.')
-  options.add_argument('fastq1', type=Path,
+  io.add_argument('fastq1', type=Path,
     help='Input reads, mate 1')
-  options.add_argument('fastq2', type=Path,
+  io.add_argument('fastq2', type=Path,
     help='Input reads, mate 2')
-  options.add_argument('seqs_to_refs', type=Path,
+  io.add_argument('seqs_to_refs', type=Path,
     help='File mapping sequence names to reference files. Should contain one line per sequence, '
       'with two tab-delimited columns: the sequence name, and the path to the reference file. '
       'If --refs is given, the path will be interpreted as a relative path under the --refs '
       'directory.')
-  options.add_argument('-o', '--output', type=Path,
+  io.add_argument('-o', '--output', type=Path,
     help='Write the output BAM to this file. Default: choose a filename based on the first fastq '
       'file.')
-  options.add_argument('--refs-dir', type=Path,
+  io.add_argument('-d', '--refs-dir', type=Path,
     help='Directory containing all reference files.')
+  io.add_argument('-c', '--ref-counts', type=Path,
+    help='Print the tallies of how many reads aligned to each sequence here. Format is one line '
+      'per sequence, with two tab-delimited columns: the name of the sequence, and the number of '
+      'reads that aligned to it.')
+  options = parser.add_argument_group('Options')
   options.add_argument('-m', '--mapq', type=int,
     help='MAPQ threshold when evaluating meta-alignment.')
   options.add_argument('-s', '--min-size', type=int,
@@ -86,6 +91,8 @@ def main(argv: List[str]) -> int:
   # Count alignments to each sequence.
   logging.warning('Counting alignments to each reference sequence..')
   aln_counts = count_alignments(align_tmp_path, args.mapq)
+  if args.ref_counts:
+    write_ref_counts(aln_counts, args.ref_counts)
   best_seq = get_best_seq(aln_counts, seq_sizes, args.min_size)
   if best_seq is None:
     fail(f'No quality alignments found. Could not determine best reference.')
@@ -150,6 +157,12 @@ def count_alignments(align_path: Path, mapq_thres: int=None) -> collections.Coun
     if is_good_alignment(aln, mapq_thres):
       aln_counts[aln.rname] += 1
   return aln_counts
+
+
+def write_ref_counts(aln_counts: collections.Counter, ref_counts_path: Path) -> None:
+  with ref_counts_path.open('w') as ref_counts_file:
+    for seq_name, count in sorted(aln_counts.items(), reverse=True, key=lambda item: item[1]):
+      ref_counts_file.write(f'{seq_name}\t{count}\n')
 
 
 def get_best_seq(
