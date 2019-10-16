@@ -17,10 +17,13 @@ def make_argparser():
     '-e', '--errors', action='append', nargs=2, metavar=('name', 'errors.tsv'), required=True,
     help='The errors output by overlaps.py --details. Give a sample name and the path to the '
       'errors file. Use --errors once for each sample.')
+  options.add_argument('-o', '--output', type=argparse.FileType('w'), default=sys.stdout,
+    help='Write output to this file instead of stdout.')
   options.add_argument('-t', '--tsv', action='store_const', dest='format', const='tsv', default='human',
-    help='Output the raw data in tab-delimited format.')
+    help='Output the counts (total and binned) in tab-delimited format.')
   options.add_argument('-m', '--min-errors', type=int, default=1000,
-    help='Minimum number of errors that must be present in a bin in order to output an error rate.')
+    help='Minimum number of errors that must be present in a bin in order to output an error rate. '
+      'Default: %(default)s')
   options.add_argument('-h', '--help', action='help',
     help='Print this argument help text and exit.')
   logs = parser.add_argument_group('Logging')
@@ -52,10 +55,10 @@ def main(argv):
     metastats[sample] = compile_stats(parse_errors(errors_path))
 
   if args.format == 'tsv':
-    print(format_tsv(make_tsv_data(metastats)))
-  if args.format == 'human':
+    print(format_tsv(make_tsv_data(metastats)), file=args.output)
+  elif args.format == 'human':
     table = make_table_data(metastats, min_errors=args.min_errors)
-    print(format_table(table, spacing=2))
+    print(format_table(table, spacing=2), file=args.output)
 
 
 def parse_errors(path):
