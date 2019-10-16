@@ -21,6 +21,7 @@ def make_argparser() -> argparse.ArgumentParser:
   io.add_argument('outdir', type=Path)
   io.add_argument('meta_ref', type=Path)
   io.add_argument('seqs_to_refs', type=Path)
+  io.add_argument('-r', '--refs-dir', type=Path, required=True)
   params = parser.add_argument_group('Parameters')
   params.add_argument('-q', '--mapq', type=int,
     help='Minimum MAPQ required when examining aligned reads.')
@@ -31,7 +32,7 @@ def make_argparser() -> argparse.ArgumentParser:
     help='Number of threads to use when aligning to the reference. Default: %(default)s')
   options.add_argument('-S', '--slurm', action='store_true',
     help='Run subcommands on Slurm cluster.')
-  options.add_argument('--mem-ratio', type=int, default=400,
+  options.add_argument('--mem-ratio', type=int, default=500,
     help='Default: %(default)s bytes per base')
   options.add_argument('--min-mem', type=int, default=16*1024*1024*1024,
     help='Default: %(default)s bytes')
@@ -76,7 +77,7 @@ def main(argv: List[str]) -> int:
   )
 
   # Find errors in overlaps.
-  overlap(args.outdir/'align.auto.name.bam', args.outdir, args.mapq, args.slurm, args.acc)
+  overlap(args.outdir/'align.auto.bam', args.outdir, args.mapq, args.slurm, args.acc)
 
   # Calculate statistics on errors.
   analyze(args.outdir/'errors.tsv', args.outdir, args.acc, args.slurm)
@@ -92,7 +93,9 @@ def download(acc: str, outdir: Path, slurm: bool=False) -> None:
   cmd: List = ['fasterq-dump', '--threads', '8', '--temp', TMP_DIR, acc, '-o', outdir/'reads']
   if slurm:
     cmd = ['srun', '-C', 'new', '-J', acc+':down', '--cpus-per-task', '8', '--mem', '10G'] + cmd
-  run_command(cmd)
+  exit_code = run_command(cmd)
+  if exit_code != 0:
+    fail(f'fasterq-dump failed with exit code {exit_code}.')
 
 
 def align(
@@ -104,31 +107,37 @@ def align(
   cmd: List = [
     SCRIPT_DIR/'align-multi.py', '--threads', threads, '--name-sort', '--keep-tmp',
     '--refs-dir', refs_dir, seqs_to_refs, meta_ref, fq1_path, fq2_path,
-    '--ref-counts', outdir/'ref-counts.tsv', '--output', outdir/'align.auto.name.bam'
+    '--ref-counts', outdir/'ref-counts.tsv', '--output', outdir/'align.auto.bam'
   ]
   if mapq is not None:
-    cmd[2:2] = ['--mapq', mapq]
+    cmd[1:1] = ['--mapq', mapq]
   if min_ref_size is not None:
-    cmd[2:2] = ['--min-size', min_ref_size]
+    cmd[1:1] = ['--min-size', min_ref_size]
   if slurm:
     acc = cast(str, acc)
     cmd = [
       'srun', '-C', 'new', '-J', acc+':align', '--cpus-per-task', threads, '--mem', mem_req
     ] + cmd
-  run_command(cmd)
+  exit_code = run_command(cmd)
+  if exit_code != 0:
+    fail(f'align-multi.py failed with exit code {exit_code}.')
 
 
 def overlap(
-    align_path: Path, outdir: Path, mapq: int, slurm: bool=False, acc: Optional[str]=None
+    align_path: Path, outdir: Path, mapq: Optional[int], slurm: bool=False, acc: Optional[str]=None
 ) -> None:
   cmd: List = [
-    SCRIPT_DIR/'overlaps.py', '--mapq', mapq, '--details', align_path, '--progress', '0',
+    SCRIPT_DIR/'overlaps.py', '--details', align_path, '--progress', '0',
     '--output2', 'summary', outdir/'errors.summary.tsv', '--output', outdir/'errors.tsv'
   ]
+  if mapq is not None:
+    cmd[1:1] = ['--mapq', mapq]
   if slurm:
     acc = cast(str, acc)
     cmd = ['srun', '-C', 'new', '-J', acc+':over', '--mem', '24G'] + cmd
-  run_command(cmd)
+  exit_code = run_command(cmd)
+  if exit_code != 0:
+    fail(f'overlaps.py failed with exit code {exit_code}.')
 
 
 def analyze(errors_path: Path, outdir: Path, acc: str, slurm: bool=False) -> None:
@@ -137,7 +146,9 @@ def analyze(errors_path: Path, outdir: Path, acc: str, slurm: bool=False) -> Non
   ]
   if slurm:
     cmd = ['srun', '-C', 'new', '-J', acc+':analyze', '--mem', '24G'] + cmd
-  run_command(cmd)
+  exit_code = run_command(cmd)
+  if exit_code != 0:
+    fail(f'analyze.py failed with exit code {exit_code}.')
 
 
 def get_fq_size(fq1_path: Path, fq2_path: Path) -> Tuple[Optional[int],Optional[int]]:
@@ -178,7 +189,8 @@ def format_mem_req(mem_bytes: int) -> str:
 def run_command(cmd_raw: List) -> None:
   cmd: List[str] = list(map(str, cmd_raw))
   logging.warning('+ $ '+' '.join(cmd))
-  subprocess.run(cmd)
+  result = subprocess.run(cmd)
+  return result.returncode
 
 
 def fail(message: str) -> None:
