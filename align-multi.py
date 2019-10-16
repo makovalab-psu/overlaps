@@ -129,7 +129,7 @@ def get_path_base(reads_path: Path, out_path: Optional[Path]) -> str:
     if basename.endswith('_1') or basename.endswith('_2'):
       basename = basename[:-2]
     dir_path = reads_path.parent
-  return str(dir_path.parent / basename)
+  return str(dir_path / basename)
 
 
 def get_tmp_path(base: str, ext: str) -> Path:
