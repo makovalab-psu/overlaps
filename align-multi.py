@@ -9,7 +9,7 @@ from pathlib import Path
 import random
 import subprocess
 import sys
-from typing import List, Dict, Tuple, Union
+from typing import List, Dict, Tuple, Optional, cast
 from bfx import samreader
 assert sys.version_info.major >= 3, 'Python 3 required'
 
@@ -46,6 +46,8 @@ def make_argparser() -> argparse.ArgumentParser:
       'per sequence, with two tab-delimited columns: the name of the sequence, and the number of '
       'reads that aligned to it.')
   options = parser.add_argument_group('Options')
+  options.add_argument('-N', '--name-sort', action='store_true',
+    help='Sort the output BAM by name.')
   options.add_argument('-m', '--mapq', type=int,
     help='MAPQ threshold when evaluating meta-alignment.')
   options.add_argument('-s', '--min-size', type=int,
@@ -75,7 +77,7 @@ def main(argv: List[str]) -> int:
   logging.basicConfig(stream=args.log, level=args.volume, format='%(message)s')
 
   # Process arguments and create paths.
-  base = get_reads_base(args.fastq1)
+  base = get_reads_base(args.fastq1, args.output)
   align_tmp_path = get_tmp_path(base+'.align.meta', 'bam')
   if args.output:
     out_path = args.output
@@ -96,11 +98,12 @@ def main(argv: List[str]) -> int:
   best_seq = get_best_seq(aln_counts, seq_sizes, args.min_size)
   if best_seq is None:
     fail(f'No quality alignments found. Could not determine best reference.')
+  best_seq = cast(str, best_seq)
 
   # Find the right reference file and align to it.
   ref_path = get_ref_path(best_seq, seqs_to_refs, args.refs_dir)
   logging.warning(f'Found {ref_path.name} to be the best reference choice.')
-  align(ref_path, args.fastq1, args.fastq2, out_path, threads=args.threads)
+  align(ref_path, args.fastq1, args.fastq2, out_path, threads=args.threads, name_sort=args.name_sort)
 
   if not args.keep_tmp:
     align_tmp_bai_path = Path(str(align_tmp_path)+'.bai')
@@ -111,14 +114,19 @@ def main(argv: List[str]) -> int:
   return 0
 
 
-def get_reads_base(reads_path: Path) -> str:
+def get_reads_base(reads_path: Path, out_path: Optional[Path]) -> str:
   """Get the basename of a file, omitting any `_1` or `_2` before the extension.
   Takes a path, possibly including directories, and returns a string of the whole
   path, but with the file extension and any `_1` or `_2` removed."""
-  basename = reads_path.stem
-  if basename.endswith('_1') or basename.endswith('_2'):
-    basename = basename[:-2]
-  return str(reads_path.parent / basename)
+  if out_path:
+    basename = out_path.stem
+    dir_path = out_path.parent
+  else:
+    basename = reads_path.stem
+    if basename.endswith('_1') or basename.endswith('_2'):
+      basename = basename[:-2]
+    dir_path = reads_path.parent
+  return str(dir_path.parent / basename)
 
 
 def get_tmp_path(base: str, ext: str) -> Path:
@@ -135,9 +143,14 @@ def get_tmp_path(base: str, ext: str) -> Path:
   return Path(name)
 
 
-def align(ref_path: Path, fq1_path: Path, fq2_path: Path, out_path: Path, threads: int=1) -> None:
+def align(
+    ref_path: Path, fq1_path: Path, fq2_path: Path, out_path: Path, threads: int=1,
+    name_sort: bool=False
+) -> None:
   cmd_raw = ('align.py', 'bwa', '--threads', threads, ref_path, fq1_path, fq2_path, '-o', out_path)
   cmd = list(map(str, cmd_raw))
+  if name_sort:
+    cmd.insert(2, '--name-sort')
   logging.warning('+ $ '+' '.join(cmd))
   subprocess.run(cmd)
 
@@ -172,7 +185,7 @@ def write_ref_counts(aln_counts: collections.Counter, ref_counts_path: Path) -> 
 
 def get_best_seq(
     aln_counts: collections.Counter, seq_sizes: Dict[str,int], min_size: int=None
-) -> Union[str, None]:
+) -> Optional[str]:
   for seq_name, count in sorted(aln_counts.items(), reverse=True, key=lambda item: item[1]):
     if min_size is None or seq_sizes[seq_name] >= min_size:
       return seq_name
