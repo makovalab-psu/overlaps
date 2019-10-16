@@ -92,10 +92,8 @@ def get_fq_paths(outdir: Path) -> Tuple[Path,Path]:
 def download(acc: str, outdir: Path, slurm: bool=False) -> None:
   cmd: List = ['fasterq-dump', '--threads', '8', '--temp', TMP_DIR, acc, '-o', outdir/'reads']
   if slurm:
-    cmd = ['srun', '-C', 'new', '-J', acc+':down', '--cpus-per-task', '8', '--mem', '10G'] + cmd
-  exit_code = run_command(cmd)
-  if exit_code != 0:
-    fail(f'fasterq-dump failed with exit code {exit_code}.')
+    cmd = ['srun', '-C', 'new', '-J', acc+':download', '--cpus-per-task', '8', '--mem', '10G'] + cmd
+  run_command(cmd, onerror='fail', exe='fasterq-dump')
 
 
 def align(
@@ -118,9 +116,7 @@ def align(
     cmd = [
       'srun', '-C', 'new', '-J', acc+':align', '--cpus-per-task', threads, '--mem', mem_req
     ] + cmd
-  exit_code = run_command(cmd)
-  if exit_code != 0:
-    fail(f'align-multi.py failed with exit code {exit_code}.')
+  run_command(cmd, onerror='fail', exe='align-multi.py')
 
 
 def overlap(
@@ -134,10 +130,8 @@ def overlap(
     cmd[1:1] = ['--mapq', mapq]
   if slurm:
     acc = cast(str, acc)
-    cmd = ['srun', '-C', 'new', '-J', acc+':over', '--mem', '24G'] + cmd
-  exit_code = run_command(cmd)
-  if exit_code != 0:
-    fail(f'overlaps.py failed with exit code {exit_code}.')
+    cmd = ['srun', '-C', 'new', '-J', acc+':overlaps', '--mem', '24G'] + cmd
+  run_command(cmd, onerror='fail', exe='overlaps.py')
 
 
 def analyze(errors_path: Path, outdir: Path, acc: str, slurm: bool=False) -> None:
@@ -146,18 +140,19 @@ def analyze(errors_path: Path, outdir: Path, acc: str, slurm: bool=False) -> Non
   ]
   if slurm:
     cmd = ['srun', '-C', 'new', '-J', acc+':analyze', '--mem', '24G'] + cmd
-  exit_code = run_command(cmd)
-  if exit_code != 0:
-    fail(f'analyze.py failed with exit code {exit_code}.')
+  run_command(cmd, onerror='fail', exe='analyze.py')
 
 
 def get_fq_size(fq1_path: Path, fq2_path: Path) -> Tuple[Optional[int],Optional[int]]:
   cmd = ('bioawk', '-c', 'fastx', '{tot+=length($seq)} END {print tot}', fq1_path, fq2_path)
   result = subprocess.run(cmd, stdout=subprocess.PIPE, encoding='utf8')
   if result.returncode != 0:
-    return None, None
-  bases = int(result.stdout.strip())
+    logging.warning(f'Warning: Could not determine number of bases in sample.')
+    bases = None
+  else:
+    bases = int(result.stdout.strip())
   bytes_ = os.path.getsize(fq1_path) + os.path.getsize(fq2_path)
+  logging.info(f'Info: Sample is {bases} bases and {bytes_} bytes.')
   return bases, bytes_
 
 
@@ -186,10 +181,18 @@ def format_mem_req(mem_bytes: int) -> str:
   return f'{mem_kb}K'
 
 
-def run_command(cmd_raw: List) -> None:
+def run_command(cmd_raw: List, onerror: str='warn', exe: Optional[str]=None) -> int:
   cmd: List[str] = list(map(str, cmd_raw))
   logging.warning('+ $ '+' '.join(cmd))
   result = subprocess.run(cmd)
+  if result.returncode != 0:
+    if exe is None:
+      exe = os.path.basename(cmd[0])
+    message = f'{exe} failed with exit code {result.returncode}.'
+    if onerror == 'warn':
+      logging.warning('Warning: '+message)
+    elif onerror == 'fail':
+      fail(message)
   return result.returncode
 
 
