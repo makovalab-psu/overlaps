@@ -49,6 +49,11 @@ def make_argparser():
       'will be overwritten.')
   parser.add_argument('-m', '--mapq', type=int,
     help='Mapping quality threshold. Alignments worse than this MAPQ will be ignored.')
+  #TODO:
+  # parser.add_argument('-q', '--phred', type=int,
+  #   help="Don't count bases with PHRED scores below this as errors.")
+  # parser.add_argument('-N', '--ignore-ns', action='store_true',
+  #   help="Don't count N's as errors.")
   parser.add_argument('-H', '--human', dest='format', action='store_const', const='human',
     default='tsv',
     help='Print human-readable text instead of tab-delimited output.')
@@ -101,7 +106,7 @@ def main(argv):
   if args.output2:
     if args.output2[0] == 'details':
       details_files.append(open(args.output2[1], 'w'))
-    elif args.output2[1] == 'summary':
+    elif args.output2[0] == 'summary':
       summary_files.append(open(args.output2[1], 'w'))
     else:
       fail(f'Invalid --output2 type {args.output2[1]!r}.')
