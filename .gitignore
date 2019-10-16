@@ -1,4 +1,6 @@
 *.pyc
 *.bai
 *.fai
+*.gz
+.mypy_cache
 __pycache__

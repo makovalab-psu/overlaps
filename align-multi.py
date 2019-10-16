@@ -77,8 +77,11 @@ def main(argv: List[str]) -> int:
   logging.basicConfig(stream=args.log, level=args.volume, format='%(message)s')
 
   # Process arguments and create paths.
-  base = get_reads_base(args.fastq1, args.output)
-  align_tmp_path = get_tmp_path(base+'.align.meta', 'bam')
+  base = get_path_base(args.fastq1, args.output)
+  if os.path.basename(base).startswith('align.'):
+    align_tmp_path = get_tmp_path(base+'.meta', 'bam')
+  else:
+    align_tmp_path = get_tmp_path(base+'.align.meta', 'bam')
   if args.output:
     out_path = args.output
   else:
@@ -114,7 +117,7 @@ def main(argv: List[str]) -> int:
   return 0
 
 
-def get_reads_base(reads_path: Path, out_path: Optional[Path]) -> str:
+def get_path_base(reads_path: Path, out_path: Optional[Path]) -> str:
   """Get the basename of a file, omitting any `_1` or `_2` before the extension.
   Takes a path, possibly including directories, and returns a string of the whole
   path, but with the file extension and any `_1` or `_2` removed."""
