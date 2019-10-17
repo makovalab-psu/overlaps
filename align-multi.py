@@ -48,6 +48,8 @@ def make_argparser() -> argparse.ArgumentParser:
   options = parser.add_argument_group('Options')
   options.add_argument('-N', '--name-sort', action='store_true',
     help='Sort the output BAM by name.')
+  options.add_argument('-c', '--clobber', action='store_true',
+    help='Overwrite any existing alignment files (give --clobber option to align.py).')
   options.add_argument('-m', '--mapq', type=int,
     help='MAPQ threshold when evaluating meta-alignment.')
   options.add_argument('-s', '--min-size', type=int,
@@ -91,7 +93,10 @@ def main(argv: List[str]) -> int:
   seqs_to_refs, seq_sizes = read_map(args.seqs_to_refs)
 
   # Align to meta-reference.
-  align(args.meta_ref, args.fastq1, args.fastq2, align_tmp_path, threads=args.threads)
+  align(
+    args.meta_ref, args.fastq1, args.fastq2, align_tmp_path, threads=args.threads,
+    clobber=args.clobber,
+  )
 
   # Count alignments to each sequence.
   logging.warning('Counting alignments to each reference sequence..')
@@ -106,7 +111,10 @@ def main(argv: List[str]) -> int:
   # Find the right reference file and align to it.
   ref_path = get_ref_path(best_seq, seqs_to_refs, args.refs_dir)
   logging.warning(f'Found {ref_path.name} to be the best reference choice.')
-  align(ref_path, args.fastq1, args.fastq2, out_path, threads=args.threads, name_sort=args.name_sort)
+  align(
+    ref_path, args.fastq1, args.fastq2, out_path, threads=args.threads, name_sort=args.name_sort,
+    clobber=args.clobber,
+  )
 
   if not args.keep_tmp:
     align_tmp_bai_path = Path(str(align_tmp_path)+'.bai')
@@ -148,9 +156,11 @@ def get_tmp_path(base: str, ext: str) -> Path:
 
 def align(
     ref_path: Path, fq1_path: Path, fq2_path: Path, out_path: Path, threads: int=1,
-    name_sort: bool=False
+    name_sort: bool=False, clobber: bool=False,
 ) -> None:
-  cmd_raw = ('align.py', 'bwa', '--threads', threads, ref_path, fq1_path, fq2_path, '-o', out_path)
+  cmd_raw = ['align.py', 'bwa', '--threads', threads, ref_path, fq1_path, fq2_path, '-o', out_path]
+  if clobber:
+    cmd_raw.insert(2, '--clobber')
   cmd = list(map(str, cmd_raw))
   if name_sort:
     cmd.insert(2, '--name-sort')
