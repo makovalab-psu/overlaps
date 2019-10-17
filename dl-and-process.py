@@ -34,7 +34,7 @@ def make_argparser() -> argparse.ArgumentParser:
   params.add_argument('--min-ref-size', type=int,
     help='Minimum size of reference sequence to consider when choosing between them.')
   options = parser.add_argument_group('Options')
-  options.add_argument('-b', '--begin', type=int, default=1,
+  options.add_argument('-b', '--begin', type=int,
     help='Start at this step instead of the beginning.')
   options.add_argument('-t', '--threads', type=int, default=1,
     help='Number of threads to use when aligning to the reference. Default: %(default)s')
@@ -69,12 +69,15 @@ def main(argv: List[str]) -> int:
   # Process arguments.
   fq1_path, fq2_path = get_fq_paths(args.outdir)
   mem_params = {'min_mem':args.min_mem, 'max_mem':args.max_mem, 'ratio':args.mem_ratio}
-  begin = args.begin
+  begin = 1
   if args.progress_file:
     if args.progress_file.is_file():
       progress = read_config_section(args.progress_file, 'end', {'step':int})
       begin = progress['step']+1
+    if args.begin:
+      begin = args.begin
     update_config(args.progress_file, 'start', step=begin, when=int(time.time()))
+    del_config_section(args.progress_file, 'end')
 
   # Step 1: Download.
   if begin <= 1:
@@ -129,6 +132,19 @@ def update_config(config_path: Path, section: str, **kwargs) -> None:
     data = config[section]
   for key, value in kwargs.items():
     data[key] = str(value)
+  with config_path.open('w') as config_file:
+    config.write(config_file)
+
+
+def del_config_section(config_path: Path, section: str) -> None:
+  if not config_path.is_file():
+    return
+  config = configparser.ConfigParser(interpolation=None)
+  config.read(config_path)
+  try:
+    del config[section]
+  except KeyError:
+    return
   with config_path.open('w') as config_file:
     config.write(config_file)
 
