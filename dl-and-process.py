@@ -1,33 +1,41 @@
 #!/usr/bin/env python3
 import argparse
+import configparser
 import logging
 import os
 from pathlib import Path
-from typing import List, Tuple, Any, Optional, cast
+from typing import Dict, List, Tuple, Any, Union, Optional, cast
 import subprocess
 import sys
+import time
 assert sys.version_info.major >= 3, 'Python 3 required'
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 TMP_DIR = Path('~/tmp').expanduser()
-DESCRIPTION = """"""
+DESCRIPTION = """Automatically download and analyze an SRA run."""
 
 
 def make_argparser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(add_help=False, description=DESCRIPTION)
   io = parser.add_argument_group('I/O')
+  io.add_argument('meta_ref', type=Path)
+  io.add_argument('seqs_to_refs', type=Path)
   io.add_argument('acc', metavar='SRA accession',
     help='Accession number of the run to process.')
   io.add_argument('outdir', type=Path)
-  io.add_argument('meta_ref', type=Path)
-  io.add_argument('seqs_to_refs', type=Path)
   io.add_argument('-r', '--refs-dir', type=Path, required=True)
+  io.add_argument('-p', '--progress-file', type=Path,
+    help='File to track how much of the pipeline we\'ve completed. If it exists, this will read '
+      'the file and assume it records the last step completed by a previous run. It will also '
+      'record how far we got in this run.')
   params = parser.add_argument_group('Parameters')
   params.add_argument('-q', '--mapq', type=int,
     help='Minimum MAPQ required when examining aligned reads.')
   params.add_argument('--min-ref-size', type=int,
     help='Minimum size of reference sequence to consider when choosing between them.')
   options = parser.add_argument_group('Options')
+  options.add_argument('-b', '--begin', type=int, default=1,
+    help='Start at this step instead of the beginning.')
   options.add_argument('-t', '--threads', type=int, default=1,
     help='Number of threads to use when aligning to the reference. Default: %(default)s')
   options.add_argument('-S', '--slurm', action='store_true',
@@ -61,32 +69,86 @@ def main(argv: List[str]) -> int:
   # Process arguments.
   fq1_path, fq2_path = get_fq_paths(args.outdir)
   mem_params = {'min_mem':args.min_mem, 'max_mem':args.max_mem, 'ratio':args.mem_ratio}
+  begin = args.begin
+  if args.progress_file:
+    if args.progress_file.is_file():
+      progress = read_config_section(args.progress_file, 'end', {'step':int})
+      begin = progress['step']+1
+    update_config(args.progress_file, 'start', step=begin, when=int(time.time()))
 
-  # Download.
-  download(args.acc, args.outdir, slurm=args.slurm)
+  # Step 1: Download.
+  if begin <= 1:
+    download(args.acc, args.outdir, slurm=args.slurm)
+    record_progress(args.progress_file, 1)
 
-  # Check the size of the data.
-  if args.slurm:
+  # Step 2: Align.
+  if begin <= 2:
+    # Check the size of the data.
     fq_bases, fq_bytes = get_fq_size(fq1_path, fq2_path)
-    mem_req = format_mem_req(get_mem_req(fq_bases, fq_bytes, **mem_params))
+    if args.slurm:
+      # Determine how much memory to request from Slurm.
+      mem_req = format_mem_req(get_mem_req(fq_bases, fq_bytes, **mem_params))
+    align(
+      args.outdir, args.refs_dir, args.seqs_to_refs, args.meta_ref, args.mapq, args.min_ref_size,
+      args.threads, args.slurm, mem_req, args.acc
+    )
+    record_progress(args.progress_file, 2)
 
-  # Align.
-  align(
-    args.outdir, args.refs_dir, args.seqs_to_refs, args.meta_ref, args.mapq, args.min_ref_size,
-    args.threads, args.slurm, mem_req, args.acc
-  )
+  # Step 3: Find errors in overlaps.
+  if begin <= 3:
+    overlap(args.outdir/'align.auto.bam', args.outdir, args.mapq, args.slurm, args.acc)
+    record_progress(args.progress_file, 3)
 
-  # Find errors in overlaps.
-  overlap(args.outdir/'align.auto.bam', args.outdir, args.mapq, args.slurm, args.acc)
-
-  # Calculate statistics on errors.
-  analyze(args.outdir/'errors.tsv', args.outdir, args.acc, args.slurm)
+  # Step 4: Calculate statistics on errors.
+  if begin <= 4:
+    analyze(args.outdir/'errors.tsv', args.outdir, args.acc, args.slurm)
+    record_progress(args.progress_file, 4)
 
   return 0
 
 
 def get_fq_paths(outdir: Path) -> Tuple[Path,Path]:
   return outdir/'reads_1.fastq', outdir/'reads_2.fastq'
+
+
+def record_progress(progress_path: Optional[Path], step: int) -> None:
+  if progress_path is None:
+    return
+  update_config(progress_path, 'end', step=step, when=int(time.time()))
+
+
+def update_config(config_path: Path, section: str, **kwargs) -> None:
+  config = configparser.ConfigParser(interpolation=None)
+  if config_path.is_file():
+    config.read(config_path)
+  data: Union[dict,configparser.SectionProxy]
+  try:
+    data = config[section]
+  except KeyError:
+    config.add_section(section)
+    data = config[section]
+  for key, value in kwargs.items():
+    data[key] = str(value)
+  with config_path.open('w') as config_file:
+    config.write(config_file)
+
+
+def read_config_section(
+    config_path: Path, section: str, types: Optional[Dict[str,type]]=None
+) -> Dict[str,Any]:
+  data = {}
+  config = configparser.ConfigParser(interpolation=None)
+  try:
+    config.read(config_path)
+    for key, raw_value in config.items(section):
+      if types and key in types:
+        value = types[key](raw_value)
+      else:
+        value = raw_value
+      data[key] = value
+  except configparser.Error:
+    fail(f'Invalid config file format in {config_path!r}.')
+  return data
 
 
 def download(acc: str, outdir: Path, slurm: bool=False) -> None:
@@ -103,7 +165,7 @@ def align(
 ) -> None:
   fq1_path, fq2_path = get_fq_paths(outdir)
   cmd: List = [
-    SCRIPT_DIR/'align-multi.py', '--threads', threads, '--name-sort', '--keep-tmp',
+    SCRIPT_DIR/'align-multi.py', '--clobber', '--threads', threads, '--name-sort', '--keep-tmp',
     '--refs-dir', refs_dir, seqs_to_refs, meta_ref, fq1_path, fq2_path,
     '--ref-counts', outdir/'ref-counts.tsv', '--output', outdir/'align.auto.bam'
   ]
