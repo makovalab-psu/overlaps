@@ -71,11 +71,11 @@ def main(argv: List[str]) -> int:
   mem_params = {'min_mem':args.min_mem, 'max_mem':args.max_mem, 'ratio':args.mem_ratio}
   begin = 1
   if args.progress_file:
-    if args.progress_file.is_file():
-      progress = read_config_section(args.progress_file, 'end', {'step':int})
-      begin = progress['step']+1
     if args.begin:
       begin = args.begin
+    elif args.progress_file.is_file():
+      progress = read_config_section(args.progress_file, 'end', {'step':int})
+      begin = progress.get('step', 0)+1
     update_config(args.progress_file, 'start', step=begin, when=int(time.time()))
     del_config_section(args.progress_file, 'end')
 
