@@ -48,7 +48,7 @@ def make_argparser() -> argparse.ArgumentParser:
   options = parser.add_argument_group('Options')
   options.add_argument('-N', '--name-sort', action='store_true',
     help='Sort the output BAM by name.')
-  options.add_argument('-c', '--clobber', action='store_true',
+  options.add_argument('-C', '--clobber', action='store_true',
     help='Overwrite any existing alignment files (give --clobber option to align.py).')
   options.add_argument('-m', '--mapq', type=int,
     help='MAPQ threshold when evaluating meta-alignment.')
