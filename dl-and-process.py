@@ -40,6 +40,9 @@ def make_argparser() -> argparse.ArgumentParser:
     help='Number of threads to use when aligning to the reference. Default: %(default)s')
   options.add_argument('-S', '--slurm', action='store_true',
     help='Run subcommands on Slurm cluster.')
+  options.add_argument('-w', '--wait-config', type=Path,
+    help='The config file for slurm-wait.py, if you want to invoke it before launching each '
+      'slurm job.')
   options.add_argument('--mem-ratio', type=int, default=500,
     help='Default: %(default)s bytes per base')
   options.add_argument('--min-mem', type=int, default=16*1024*1024*1024,
@@ -69,6 +72,11 @@ def main(argv: List[str]) -> int:
   # Process arguments.
   fq1_path, fq2_path = get_fq_paths(args.outdir)
   mem_params = {'min_mem':args.min_mem, 'max_mem':args.max_mem, 'ratio':args.mem_ratio}
+  slurm_params: Optional[Dict[str,Any]] = None
+  if args.slurm:
+    slurm_params = {}
+    if args.wait_config:
+      slurm_params['config'] = args.wait_config
   begin = 1
   if args.progress_file:
     if args.begin:
@@ -81,7 +89,7 @@ def main(argv: List[str]) -> int:
 
   # Step 1: Download.
   if begin <= 1:
-    download(args.acc, args.outdir, slurm=args.slurm)
+    download(args.acc, args.outdir, slurm_params)
     record_progress(args.progress_file, 1)
 
   # Step 2: Align.
@@ -93,18 +101,18 @@ def main(argv: List[str]) -> int:
       mem_req = format_mem_req(get_mem_req(fq_bases, fq_bytes, **mem_params))
     align(
       args.outdir, args.refs_dir, args.seqs_to_refs, args.meta_ref, args.mapq, args.min_ref_size,
-      args.threads, args.slurm, mem_req, args.acc
+      args.threads, slurm_params, mem_req, args.acc
     )
     record_progress(args.progress_file, 2)
 
   # Step 3: Find errors in overlaps.
   if begin <= 3:
-    overlap(args.outdir/'align.auto.bam', args.outdir, args.mapq, args.slurm, args.acc)
+    overlap(args.outdir/'align.auto.bam', args.outdir, args.mapq, slurm_params, args.acc)
     record_progress(args.progress_file, 3)
 
   # Step 4: Calculate statistics on errors.
   if begin <= 4:
-    analyze(args.outdir/'errors.tsv', args.outdir, args.acc, args.slurm)
+    analyze(args.outdir/'errors.tsv', args.outdir, args.acc, slurm_params)
     record_progress(args.progress_file, 4)
 
   return 0
@@ -170,17 +178,19 @@ def read_config_section(
   return data
 
 
-def download(acc: str, outdir: Path, slurm: bool=False) -> None:
+def download(acc: str, outdir: Path, slurm_params: Dict[str,Any]=None) -> None:
   cmd: List = ['fasterq-dump', '--threads', '8', '--temp', TMP_DIR, acc, '-o', outdir/'reads']
-  if slurm:
-    cmd = ['srun', '-C', 'new', '-J', acc+':download', '--cpus-per-task', '8', '--mem', '10G'] + cmd
+  if slurm_params is not None:
+    if 'config' in slurm_params:
+      specifier = get_slurm_specifier(slurm_wait(config=slurm_params['config'], cpus=8, mem='10G'))
+    cmd = ['srun', '-J', acc+':download', '--cpus-per-task', '8', '--mem', '10G'] + specifier + cmd
   run_command(cmd, onerror='fail', exe='fasterq-dump')
 
 
 def align(
     outdir: Path, refs_dir: Path, seqs_to_refs: Path, meta_ref: Path, mapq: Optional[int],
-    min_ref_size: Optional[int], threads: int, slurm: bool=False, mem_req: Optional[str]=None,
-    acc: Optional[str]=None,
+    min_ref_size: Optional[int], threads: int, slurm_params: Dict[str,Any]=None, mem_req: str=None,
+    acc: str=None,
 ) -> None:
   fq1_path, fq2_path = get_fq_paths(outdir)
   cmd: List = [
@@ -192,16 +202,21 @@ def align(
     cmd[1:1] = ['--mapq', mapq]
   if min_ref_size is not None:
     cmd[1:1] = ['--min-size', min_ref_size]
-  if slurm:
+  if slurm_params is not None:
+    if 'config' in slurm_params:
+      specifier = get_slurm_specifier(
+        slurm_wait(config=slurm_params['config'], cpus=threads, mem=mem_req)
+      )
     acc = cast(str, acc)
     cmd = [
-      'srun', '-C', 'new', '-J', acc+':align', '--cpus-per-task', threads, '--mem', mem_req
-    ] + cmd
+      'srun', '-J', acc+':align', '--cpus-per-task', threads, '--mem', mem_req
+    ] + specifier + cmd
   run_command(cmd, onerror='fail', exe='align-multi.py')
 
 
 def overlap(
-    align_path: Path, outdir: Path, mapq: Optional[int], slurm: bool=False, acc: Optional[str]=None
+    align_path: Path, outdir: Path, mapq: Optional[int], slurm_params: Dict[str,Any]=None,
+    acc: str=None
 ) -> None:
   cmd: List = [
     SCRIPT_DIR/'overlaps.py', '--details', align_path, '--progress', '0',
@@ -209,18 +224,22 @@ def overlap(
   ]
   if mapq is not None:
     cmd[1:1] = ['--mapq', mapq]
-  if slurm:
+  if slurm_params is not None:
+    if 'config' in slurm_params:
+      specifier = get_slurm_specifier(slurm_wait(config=slurm_params['config'], cpus=1, mem='24G'))
     acc = cast(str, acc)
-    cmd = ['srun', '-C', 'new', '-J', acc+':overlaps', '--mem', '24G'] + cmd
+    cmd = ['srun', '-J', acc+':overlaps', '--mem', '24G'] + specifier + cmd
   run_command(cmd, onerror='fail', exe='overlaps.py')
 
 
-def analyze(errors_path: Path, outdir: Path, acc: str, slurm: bool=False) -> None:
+def analyze(errors_path: Path, outdir: Path, acc: str, slurm_params: Dict[str,Any]=None) -> None:
   cmd: List = [
     SCRIPT_DIR/'analyze.py', '--tsv', '--errors', acc, errors_path, '--output', outdir/'analysis.tsv'
   ]
-  if slurm:
-    cmd = ['srun', '-C', 'new', '-J', acc+':analyze', '--mem', '24G'] + cmd
+  if slurm_params is not None:
+    if 'config' in slurm_params:
+      specifier = get_slurm_specifier(slurm_wait(config=slurm_params['config'], cpus=1, mem='24G'))
+    cmd = ['srun', '-J', acc+':analyze', '--mem', '24G'] + specifier + cmd
   run_command(cmd, onerror='fail', exe='analyze.py')
 
 
@@ -238,8 +257,8 @@ def get_fq_size(fq1_path: Path, fq2_path: Path) -> Tuple[Optional[int],Optional[
 
 
 def get_mem_req(
-    bases: Optional[int], bytes_: Optional[int], ratio: int=400, min_mem: Optional[int]=None,
-    max_mem: Optional[int]=None
+    bases: Optional[int], bytes_: Optional[int], ratio: int=400, min_mem: int=None,
+    max_mem: int=None
 ) -> int:
   if bases is not None: 
     mem = ratio*bases
@@ -262,7 +281,33 @@ def format_mem_req(mem_bytes: int) -> str:
   return f'{mem_kb}K'
 
 
-def run_command(cmd_raw: List, onerror: str='warn', exe: Optional[str]=None) -> int:
+def slurm_wait(config: Path=None, cpus: int=None, mem: str=None) -> Optional[str]:
+  cmd_raw: List[Any] = ['slurm-wait.py']
+  if config:
+    cmd_raw.extend(['--config', config])
+  if cpus:
+    cmd_raw.extend(['--cpus', cpus])
+  if mem:
+    cmd_raw.extend(['--mem', mem])
+  cmd = list(map(str, cmd_raw))
+  result = subprocess.run(cmd, stdout=subprocess.PIPE, encoding='utf8')
+  if result.returncode != 0:
+    fail(f'slurm-wait.py failed with exit code {result.returncode}.')
+  node = result.stdout.strip()
+  if node:
+    return node
+  else:
+    return None
+
+
+def get_slurm_specifier(node: Optional[str]):
+  if node is None:
+    return ['-C', 'new']
+  else:
+    return ['-w', node]
+
+
+def run_command(cmd_raw: List, onerror: str='warn', exe: str=None) -> int:
   cmd: List[str] = list(map(str, cmd_raw))
   logging.warning('+ $ '+' '.join(cmd))
   result = subprocess.run(cmd)
