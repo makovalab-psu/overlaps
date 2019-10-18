@@ -150,12 +150,14 @@ def del_config_section(config_path: Path, section: str) -> None:
 
 
 def read_config_section(
-    config_path: Path, section: str, types: Optional[Dict[str,type]]=None
+    config_path: Path, section: str, types: Dict[str,type]=None
 ) -> Dict[str,Any]:
   data = {}
   config = configparser.ConfigParser(interpolation=None)
   try:
     config.read(config_path)
+    if section not in config:
+      return data
     for key, raw_value in config.items(section):
       if types and key in types:
         value = types[key](raw_value)
@@ -163,7 +165,8 @@ def read_config_section(
         value = raw_value
       data[key] = value
   except configparser.Error:
-    fail(f'Invalid config file format in {config_path!r}.')
+    logging.critical(f'Error: Invalid config file format in {config_path!r}.')
+    raise
   return data
 
 
