@@ -38,6 +38,8 @@ def make_argparser() -> argparse.ArgumentParser:
     help='Start at this step instead of the beginning.')
   options.add_argument('-t', '--threads', type=int, default=1,
     help='Number of threads to use when aligning to the reference. Default: %(default)s')
+  options.add_argument('-T', '--dl-threads', type=int, default=4,
+    help='Number of threads to use when downloading from SRA. Default: %(default)s')
   options.add_argument('-S', '--slurm', action='store_true',
     help='Run subcommands on Slurm cluster.')
   options.add_argument('-w', '--wait-config', type=Path,
@@ -94,7 +96,7 @@ def main(argv: List[str]) -> int:
 
   # Step 1: Download.
   if begin <= 1:
-    download(args.acc, args.outdir, slurm_params)
+    download(args.acc, args.outdir, args.dl_threads, slurm_params)
     record_progress(args.progress_file, 1)
 
   # Step 2: Align.
@@ -165,7 +167,7 @@ def del_config_section(config_path: Path, section: str) -> None:
 def read_config_section(
     config_path: Path, section: str, types: Dict[str,type]=None
 ) -> Dict[str,Any]:
-  data = {}
+  data: Dict[str,Any] = {}
   config = configparser.ConfigParser(interpolation=None)
   try:
     config.read(config_path)
@@ -183,13 +185,15 @@ def read_config_section(
   return data
 
 
-def download(acc: str, outdir: Path, slurm_params: Dict[str,Any]=None) -> None:
-  cmd: List = ['fasterq-dump', '--threads', '8', '--temp', TMP_DIR, acc, '-o', outdir/'reads']
+def download(acc: str, outdir: Path, threads: int=4, slurm_params: Dict[str,Any]=None) -> None:
+  cmd: List = ['fasterq-dump', '--threads', threads, '--temp', TMP_DIR, acc, '-o', outdir/'reads']
   if slurm_params is not None:
     if 'config' in slurm_params:
-      node = slurm_wait(config=slurm_params['config'], cpus=8, mem='10G')
+      node = slurm_wait(config=slurm_params['config'], cpus=threads, mem='10G')
       specifier = get_slurm_specifier(node, slurm_params['pick_node'])
-    cmd = ['srun', '-J', acc+':download', '--cpus-per-task', '8', '--mem', '10G'] + specifier + cmd
+    cmd = [
+      'srun', '-J', acc+':download', '--cpus-per-task', threads, '--mem', '10G'
+    ] + specifier + cmd
   run_command(cmd, onerror='fail', exe='fasterq-dump')
 
 

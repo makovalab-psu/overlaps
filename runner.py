@@ -33,6 +33,8 @@ def make_argparser() -> argparse.ArgumentParser:
   options = parser.add_argument_group('Options')
   options.add_argument('-t', '--threads', type=int, default=32,
     help='Default: %(default)s')
+  options.add_argument('-T', '--dl-threads', type=int, default=4,
+    help='Number of threads to use when downloading from SRA. Default: %(default)s')
   options.add_argument('-n', '--pick-node', action='store_true',
     help='Let slurm-wait.py specify which node to run each job on. Passes this option to '
       'dl-and-process.py.')
@@ -83,7 +85,9 @@ def main(argv: List[str]) -> Optional[int]:
     except FileExistsError:
       pass
     print(f'Launching {next_acc}')
-    launch_job(next_acc, args.parent_dir, args.job_config, args.threads, args.pick_node)
+    launch_job(
+      next_acc, args.parent_dir, args.job_config, args.threads, args.dl_threads, args.pick_node
+    )
     launched.append(next_acc)
     write_list_to_file(args.launched, launched)
     last_acc = next_acc
@@ -141,10 +145,12 @@ def wait_for_node(config_path: Path, threads: int, last_acc: str=None) -> Union[
     return None
 
 
-def launch_job(acc: str, parent_dir: Path, config: Path, threads: int, pick_node: bool) -> None:
+def launch_job(
+    acc: str, parent_dir: Path, config: Path, threads: int, dl_threads: int, pick_node: bool
+  ) -> None:
   run_dir = parent_dir/'runs'/acc
   cmd_raw = cast(list, [SCRIPT_DIR/'dl-and-process.py']) + JOB_ARGS + [
-    '--threads', threads, '--wait-config', config, '--progress-file',
+    '--threads', threads, '--dl-threads', dl_threads, '--wait-config', config, '--progress-file',
     run_dir/'progress.ini', '--refs-dir', parent_dir/'refs/individual',
     parent_dir/'refs/all.complete.fa', parent_dir/'refs/seqs_to_refs.tsv', acc, run_dir
   ]
