@@ -43,6 +43,9 @@ def make_argparser() -> argparse.ArgumentParser:
   options.add_argument('-w', '--wait-config', type=Path,
     help='The config file for slurm-wait.py, if you want to invoke it before launching each '
       'slurm job.')
+  options.add_argument('-n', '--pick-node',
+    help='Use slurm-wait.py to choose the node to run the job on, instead of letting slurm '
+      'decide.')
   options.add_argument('--mem-ratio', type=int, default=500,
     help='Default: %(default)s bytes per base')
   options.add_argument('--min-mem', type=int, default=16*1024*1024*1024,
@@ -74,7 +77,7 @@ def main(argv: List[str]) -> int:
   mem_params = {'min_mem':args.min_mem, 'max_mem':args.max_mem, 'ratio':args.mem_ratio}
   slurm_params: Optional[Dict[str,Any]] = None
   if args.slurm:
-    slurm_params = {}
+    slurm_params = {'pick_node':args.pick_node}
     if args.wait_config:
       slurm_params['config'] = args.wait_config
   begin = 1
@@ -86,6 +89,8 @@ def main(argv: List[str]) -> int:
       begin = progress.get('step', 0)+1
     update_config(args.progress_file, 'start', step=begin, when=int(time.time()))
     del_config_section(args.progress_file, 'end')
+
+  #TODO: Check that the output file exists after each step.
 
   # Step 1: Download.
   if begin <= 1:
@@ -182,7 +187,8 @@ def download(acc: str, outdir: Path, slurm_params: Dict[str,Any]=None) -> None:
   cmd: List = ['fasterq-dump', '--threads', '8', '--temp', TMP_DIR, acc, '-o', outdir/'reads']
   if slurm_params is not None:
     if 'config' in slurm_params:
-      specifier = get_slurm_specifier(slurm_wait(config=slurm_params['config'], cpus=8, mem='10G'))
+      node = slurm_wait(config=slurm_params['config'], cpus=8, mem='10G')
+      specifier = get_slurm_specifier(node, slurm_params['pick_node'])
     cmd = ['srun', '-J', acc+':download', '--cpus-per-task', '8', '--mem', '10G'] + specifier + cmd
   run_command(cmd, onerror='fail', exe='fasterq-dump')
 
@@ -204,9 +210,8 @@ def align(
     cmd[1:1] = ['--min-size', min_ref_size]
   if slurm_params is not None:
     if 'config' in slurm_params:
-      specifier = get_slurm_specifier(
-        slurm_wait(config=slurm_params['config'], cpus=threads, mem=mem_req)
-      )
+      node = slurm_wait(config=slurm_params['config'], cpus=threads, mem=mem_req)
+      specifier = get_slurm_specifier(node, slurm_params['pick_node'])
     acc = cast(str, acc)
     cmd = [
       'srun', '-J', acc+':align', '--cpus-per-task', threads, '--mem', mem_req
@@ -226,7 +231,8 @@ def overlap(
     cmd[1:1] = ['--mapq', mapq]
   if slurm_params is not None:
     if 'config' in slurm_params:
-      specifier = get_slurm_specifier(slurm_wait(config=slurm_params['config'], cpus=1, mem='24G'))
+      node = slurm_wait(config=slurm_params['config'], cpus=1, mem='24G')
+      specifier = get_slurm_specifier(node, slurm_params['pick_node'])
     acc = cast(str, acc)
     cmd = ['srun', '-J', acc+':overlaps', '--mem', '24G'] + specifier + cmd
   run_command(cmd, onerror='fail', exe='overlaps.py')
@@ -238,7 +244,8 @@ def analyze(errors_path: Path, outdir: Path, acc: str, slurm_params: Dict[str,An
   ]
   if slurm_params is not None:
     if 'config' in slurm_params:
-      specifier = get_slurm_specifier(slurm_wait(config=slurm_params['config'], cpus=1, mem='24G'))
+      node = slurm_wait(config=slurm_params['config'], cpus=1, mem='24G')
+      specifier = get_slurm_specifier(node, slurm_params['pick_node'])
     cmd = ['srun', '-J', acc+':analyze', '--mem', '24G'] + specifier + cmd
   run_command(cmd, onerror='fail', exe='analyze.py')
 
@@ -300,11 +307,11 @@ def slurm_wait(config: Path=None, cpus: int=None, mem: str=None) -> Optional[str
     return None
 
 
-def get_slurm_specifier(node: Optional[str]):
-  if node is None:
-    return ['-C', 'new']
-  else:
+def get_slurm_specifier(node: Optional[str], pick_node: bool=False):
+  if pick_node and node is not None:
     return ['-w', node]
+  else:
+    return ['-C', 'new']
 
 
 def run_command(cmd_raw: List, onerror: str='warn', exe: str=None) -> int:

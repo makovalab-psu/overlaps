@@ -10,7 +10,7 @@ from typing import Union, Optional, cast, List, Tuple, Set
 assert sys.version_info.major >= 3, 'Python 3 required'
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-JOB_ARGS = ['--verbose', '--min-ref-size', 2000000, '--slurm', '--mem-ratio', 400]
+JOB_ARGS = ['--verbose', '--min-ref-size', 2000000, '--mem-ratio', 400, '--slurm']
 DESCRIPTION = """"""
 
 
@@ -33,6 +33,9 @@ def make_argparser() -> argparse.ArgumentParser:
   options = parser.add_argument_group('Options')
   options.add_argument('-t', '--threads', type=int, default=32,
     help='Default: %(default)s')
+  options.add_argument('-n', '--pick-node', action='store_true',
+    help='Let slurm-wait.py specify which node to run each job on. Passes this option to '
+      'dl-and-process.py.')
   options.add_argument('-h', '--help', action='help',
     help='Print this argument help text and exit.')
   logs = parser.add_argument_group('Logging')
@@ -80,7 +83,7 @@ def main(argv: List[str]) -> Optional[int]:
     except FileExistsError:
       pass
     print(f'Launching {next_acc}')
-    launch_job(next_acc, args.parent_dir, args.job_config, args.threads)
+    launch_job(next_acc, args.parent_dir, args.job_config, args.threads, args.pick_node)
     launched.append(next_acc)
     write_list_to_file(args.launched, launched)
     last_acc = next_acc
@@ -123,6 +126,8 @@ def wait_for_node(config_path: Path, threads: int, last_acc: str=None) -> Union[
     #TODO: This could be caught in an infinite loop if the download for the last job finishes too
     #      quickly or this script gets held up (perhaps because of one failed slurm-wait.py command).
     #      Make sure to check whether the job already finished.
+    #TODO: Also, do I want to allow for re-running incomplete jobs? Then the download step will be
+    #      skipped entirely.
     cmd_raw += ['--wait-for-job', last_acc+':download']
   cmd = list(map(str, cmd_raw))
   result = subprocess.run(cmd, stdout=subprocess.PIPE, encoding='utf8')
@@ -136,13 +141,15 @@ def wait_for_node(config_path: Path, threads: int, last_acc: str=None) -> Union[
     return None
 
 
-def launch_job(acc: str, parent_dir: Path, config: Path, threads: int) -> None:
+def launch_job(acc: str, parent_dir: Path, config: Path, threads: int, pick_node: bool) -> None:
   run_dir = parent_dir/'runs'/acc
   cmd_raw = cast(list, [SCRIPT_DIR/'dl-and-process.py']) + JOB_ARGS + [
-    '--threads', threads, '--slurm', '--wait-config', config, '--progress-file',
+    '--threads', threads, '--wait-config', config, '--progress-file',
     run_dir/'progress.ini', '--refs-dir', parent_dir/'refs/individual',
     parent_dir/'refs/all.complete.fa', parent_dir/'refs/seqs_to_refs.tsv', acc, run_dir
   ]
+  if pick_node:
+    cmd_raw.insert(1, '--pick-node')
   cmd = list(map(str, cmd_raw))
   print('$ '+' '.join(cmd))
   out_log = run_dir/'dl-and-process.out.log'
