@@ -214,13 +214,17 @@ def make_tsv_data(metastats):
     rows.append(errors_row)
     rates = []
     for errors,  overlaps in zip(stats['errors_binned'], stats['overlap_binned']):
-      if overlaps > 0:
-        rates.append(100*errors/overlaps)
-      else:
-        rates.append(None)
-    rates_row = [sample, 'rates', 100*stats['errors']/stats['overlap']] + rates
+      rates.append(divide_or_null(100*errors, overlaps))
+    rates_row = [sample, 'rates', divide_or_null(100*stats['errors'], stats['overlap'])] + rates
     rows.append(rates_row)
   return rows
+
+
+def divide_or_null(numerator, denominator, null=None):
+  try:
+    return numerator/denominator
+  except ZeroDivisionError:
+    return null
 
 
 def format_tsv(rows):
