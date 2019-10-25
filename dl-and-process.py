@@ -75,7 +75,12 @@ def main(argv: List[str]) -> int:
   logging.basicConfig(stream=args.log, level=args.volume, format='%(message)s')
 
   # Process arguments.
-  fq1_path, fq2_path = get_fq_paths(args.outdir)
+  out_paths = (
+    get_fq_paths(args.outdir),
+    (args.outdir/'align.auto.bam',),
+    (args.outdir/'errors.tsv',),
+    (args.outdir/'analysis.tsv',)
+  )
   mem_params = {'min_mem':args.min_mem, 'max_mem':args.max_mem, 'ratio':args.mem_ratio}
   slurm_params: Optional[Dict[str,Any]] = None
   if args.slurm:
@@ -97,12 +102,15 @@ def main(argv: List[str]) -> int:
   # Step 1: Download.
   if begin <= 1:
     download(args.acc, args.outdir, args.dl_threads, slurm_params)
+    fail_if_bad_output(*out_paths[0])
     record_progress(args.progress_file, 1)
 
   # Step 2: Align.
   if begin <= 2:
+    fail_if_bad_output(*out_paths[0])
     # Check the size of the data.
-    fq_bases, fq_bytes = get_fq_size(fq1_path, fq2_path)
+    fq_bases, fq_bytes = get_fq_size(*out_paths[0])
+    write_fq_size(args.outdir/'metrics.tsv', fq_bases, fq_bytes)
     if args.slurm:
       # Determine how much memory to request from Slurm.
       mem_req = format_mem_req(get_mem_req(fq_bases, fq_bytes, **mem_params))
@@ -110,16 +118,21 @@ def main(argv: List[str]) -> int:
       args.outdir, args.refs_dir, args.seqs_to_refs, args.meta_ref, args.mapq, args.min_ref_size,
       args.threads, slurm_params, mem_req, args.acc
     )
+    fail_if_bad_output(*out_paths[1])
     record_progress(args.progress_file, 2)
 
   # Step 3: Find errors in overlaps.
   if begin <= 3:
-    overlap(args.outdir/'align.auto.bam', args.outdir, args.mapq, slurm_params, args.acc)
+    fail_if_bad_output(*out_paths[1])
+    overlap(out_paths[1][0], args.outdir, args.mapq, slurm_params, args.acc)
+    fail_if_bad_output(*out_paths[2])
     record_progress(args.progress_file, 3)
 
   # Step 4: Calculate statistics on errors.
   if begin <= 4:
-    analyze(args.outdir/'errors.tsv', args.outdir, args.acc, slurm_params)
+    fail_if_bad_output(*out_paths[2])
+    analyze(out_paths[2][0], args.outdir, args.acc, slurm_params)
+    fail_if_bad_output(*out_paths[3])
     record_progress(args.progress_file, 4)
 
   return 0
@@ -254,6 +267,14 @@ def analyze(errors_path: Path, outdir: Path, acc: str, slurm_params: Dict[str,An
   run_command(cmd, onerror='fail', exe='analyze.py')
 
 
+def fail_if_bad_output(*paths: Path) -> None:
+  for path in paths:
+    if not path.is_file():
+      fail(f'Error: File {str(path)!r} not found.')
+    if os.path.getsize(path) == 0:
+      fail(f'Error: File {str(path)!r} is empty.')
+
+
 def get_fq_size(fq1_path: Path, fq2_path: Path) -> Tuple[Optional[int],Optional[int]]:
   cmd = ('bioawk', '-c', 'fastx', '{tot+=length($seq)} END {print tot}', fq1_path, fq2_path)
   result = subprocess.run(cmd, stdout=subprocess.PIPE, encoding='utf8')
@@ -265,6 +286,20 @@ def get_fq_size(fq1_path: Path, fq2_path: Path) -> Tuple[Optional[int],Optional[
   bytes_ = os.path.getsize(fq1_path) + os.path.getsize(fq2_path)
   logging.info(f'Info: Sample is {bases} bases and {bytes_} bytes.')
   return bases, bytes_
+
+
+def write_fq_size(out_path: Path, bases: Optional[int], bytes_: Optional[int]) -> None:
+  if bases is None:
+    bases_str = '.'
+  else:
+    bases_str = str(bases)
+  if bytes_ is None:
+    bytes_str = '.'
+  else:
+    bytes_str = str(bytes_)
+  with out_path.open('w') as out_file:
+    print('bases', bases_str, sep='\t', file=out_file)
+    print('bytes', bytes_str, sep='\t', file=out_file)
 
 
 def get_mem_req(
