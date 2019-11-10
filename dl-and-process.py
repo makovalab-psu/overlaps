@@ -4,7 +4,7 @@ import configparser
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple, Any, Union, Optional, cast
+from typing import Dict, List, Tuple, Sequence, Any, Union, Optional, cast
 import subprocess
 import sys
 import time
@@ -75,12 +75,6 @@ def main(argv: List[str]) -> int:
   logging.basicConfig(stream=args.log, level=args.volume, format='%(message)s')
 
   # Process arguments.
-  out_paths = (
-    get_fq_paths(args.outdir),
-    (args.outdir/'align.auto.bam',),
-    (args.outdir/'errors.tsv',),
-    (args.outdir/'analysis.tsv',)
-  )
   mem_params = {'min_mem':args.min_mem, 'max_mem':args.max_mem, 'ratio':args.mem_ratio}
   slurm_params: Optional[Dict[str,Any]] = None
   if args.slurm:
@@ -97,43 +91,48 @@ def main(argv: List[str]) -> int:
     update_config(args.progress_file, 'start', step=begin, when=int(time.time()))
     del_config_section(args.progress_file, 'end')
 
-  #TODO: Check that the output file exists after each step.
+  # Compute paths to intermediate files.
+  out_paths: Sequence[Sequence[Path]] = (
+    get_fq_paths(args.outdir),
+    (args.outdir/'align.auto.bam',),
+    (args.outdir/'errors.tsv',),
+    (args.outdir/'analysis.tsv',)
+  )
 
-  # Step 1: Download.
-  if begin <= 1:
-    download(args.acc, args.outdir, args.dl_threads, slurm_params)
-    fail_if_bad_output(*out_paths[0])
-    record_progress(args.progress_file, 1)
+  # Describe each step and how to perform it.
+  steps: Sequence[Dict[str,Any]] = (
+    {  # Step 1: Download.
+      'fxn':download, 'args':(args.acc, args.outdir, args.dl_threads, slurm_params),
+      'outputs':out_paths[0],
+    },
+    {  # Step 2: Align.
+      'fxn':size_and_align,
+      'args':(
+        out_paths[0][0], out_paths[0][1], mem_params, args.outdir, args.refs_dir,
+        args.seqs_to_refs, args.meta_ref, args.mapq, args.min_ref_size, args.threads, args.acc,
+        slurm_params
+      ),
+      'outputs':out_paths[1],
+    },
+    {  # Step 3: Find errors in overlaps.
+      'fxn':overlap, 'args':(out_paths[1][0], args.outdir, args.mapq, slurm_params, args.acc),
+      'outputs':out_paths[2],
+    },
+    {  # Step 4: Calculate statistics on errors.
+      'fxn':analyze, 'args':(out_paths[2][0], args.outdir, args.acc, slurm_params),
+      'outputs':out_paths[3],
+    },
+  )
 
-  # Step 2: Align.
-  if begin <= 2:
-    fail_if_bad_output(*out_paths[0])
-    # Check the size of the data.
-    fq_bases, fq_bytes = get_fq_size(*out_paths[0])
-    write_fq_size(args.outdir/'metrics.tsv', fq_bases, fq_bytes)
-    if args.slurm:
-      # Determine how much memory to request from Slurm.
-      mem_req = format_mem_req(get_mem_req(fq_bases, fq_bytes, **mem_params))
-    align(
-      args.outdir, args.refs_dir, args.seqs_to_refs, args.meta_ref, args.mapq, args.min_ref_size,
-      args.threads, slurm_params, mem_req, args.acc
-    )
-    fail_if_bad_output(*out_paths[1])
-    record_progress(args.progress_file, 2)
-
-  # Step 3: Find errors in overlaps.
-  if begin <= 3:
-    fail_if_bad_output(*out_paths[1])
-    overlap(out_paths[1][0], args.outdir, args.mapq, slurm_params, args.acc)
-    fail_if_bad_output(*out_paths[2])
-    record_progress(args.progress_file, 3)
-
-  # Step 4: Calculate statistics on errors.
-  if begin <= 4:
-    fail_if_bad_output(*out_paths[2])
-    analyze(out_paths[2][0], args.outdir, args.acc, slurm_params)
-    fail_if_bad_output(*out_paths[3])
-    record_progress(args.progress_file, 4)
+  # Execute each step.
+  for step_num, step in enumerate(steps, 1):
+    if begin > step_num:
+      continue
+    if step_num > 1:
+      fail_if_bad_output(*steps[step_num-2]['outputs'])
+    step['fxn'](*step['args'])
+    fail_if_bad_output(*step['outputs'])
+    record_progress(args.progress_file, step_num)
 
   return 0
 
@@ -208,6 +207,18 @@ def download(acc: str, outdir: Path, threads: int=4, slurm_params: Dict[str,Any]
       'srun', '-J', acc+':download', '--cpus-per-task', threads, '--mem', '10G'
     ] + specifier + cmd
   run_command(cmd, onerror='fail', exe='fasterq-dump')
+
+
+def size_and_align(fq1_path: Path, fq2_path: Path, mem_params: Dict[str,int], outdir: Path,
+    refs_dir: Path, seqs_to_refs: Path, meta_ref: Path, mapq: Optional[int],
+    min_ref_size: Optional[int], threads: int, acc: str=None, slurm_params: Dict[str,Any]=None
+  ) -> None:
+  fq_bases, fq_bytes = get_fq_size(fq1_path, fq2_path)
+  write_fq_size(outdir/'metrics.tsv', fq_bases, fq_bytes)
+  mem_req = format_mem_req(get_mem_req(fq_bases, fq_bytes, **mem_params))
+  align(
+    outdir, refs_dir, seqs_to_refs, meta_ref, mapq, min_ref_size, threads, slurm_params, mem_req, acc
+  )
 
 
 def align(
