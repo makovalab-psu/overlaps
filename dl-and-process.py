@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 import argparse
+import collections
 import configparser
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple, Sequence, Any, Union, Optional, cast
+from typing import Dict, List, Tuple, Mapping, Sequence, Any, Union, Optional, cast
 import subprocess
 import sys
 import time
@@ -81,15 +82,14 @@ def main(argv: List[str]) -> int:
     slurm_params = {'pick_node':args.pick_node}
     if args.wait_config:
       slurm_params['config'] = args.wait_config
-  begin = 1
-  if args.progress_file:
-    if args.begin:
-      begin = args.begin
-    elif args.progress_file.is_file():
-      progress = read_config_section(args.progress_file, 'end', {'step':int})
-      begin = progress.get('step', 0)+1
-    update_config(args.progress_file, 'start', step=begin, when=int(time.time()))
-    del_config_section(args.progress_file, 'end')
+  if args.begin:
+    begin = args.begin
+  else:
+    begin = 1
+  if args.progress_file and args.progress_file.is_file():
+    progress = read_config(args.progress_file, {'step':int, 'timestamp':int})
+    begin = progress['end'].get('step', 0)+1
+    init_progress_file(args.progress_file, begin, SCRIPT_DIR)
 
   # Compute paths to intermediate files.
   out_paths: Sequence[Sequence[Path]] = (
@@ -137,28 +137,54 @@ def main(argv: List[str]) -> int:
   return 0
 
 
-def get_fq_paths(outdir: Path) -> Tuple[Path,Path]:
-  return outdir/'reads_1.fastq', outdir/'reads_2.fastq'
+def init_progress_file(progress_file: Path, start: int, script_dir: Path) -> None:
+  data = {'start': {'step':start, 'when':int(time.time())}}
+  git_info = get_git_info(script_dir)
+  if git_info is None:
+    logging.warning(f'Warning: Failed to find git commit info in {script_dir}')
+  else:
+    data['version'] = git_info
+  update_config(progress_file, data)
+  del_config_section(progress_file, 'end')
 
 
 def record_progress(progress_path: Optional[Path], step: int) -> None:
   if progress_path is None:
     return
-  update_config(progress_path, 'end', step=step, when=int(time.time()))
+  update_config(progress_path, {'end': {'step':step, 'when':int(time.time())}})
 
 
-def update_config(config_path: Path, section: str, **kwargs) -> None:
+def read_config(config_path: Path, types: Dict[str,type]=None) -> Mapping[str,Dict[str,Any]]:
+  data: Mapping[str,Dict[str,Any]] = collections.defaultdict(dict)
+  config = configparser.ConfigParser(interpolation=None)
+  try:
+    config.read(config_path)
+    for section in config.sections():
+      for key, raw_value in config.items(section):
+        if types and key in types:
+          value = types[key](raw_value)
+        else:
+          value = raw_value
+        data[section][key] = value
+  except configparser.Error:
+    logging.critical(f'Error: Invalid config file format in {config_path!r}.')
+    raise
+  return data
+
+
+def update_config(config_path: Path, new_data: Dict[str,Dict[str,Any]]) -> None:
   config = configparser.ConfigParser(interpolation=None)
   if config_path.is_file():
     config.read(config_path)
-  data: Union[dict,configparser.SectionProxy]
-  try:
-    data = config[section]
-  except KeyError:
-    config.add_section(section)
-    data = config[section]
-  for key, value in kwargs.items():
-    data[key] = str(value)
+  for section, section_data in new_data.items():
+    data: Union[dict,configparser.SectionProxy]
+    try:
+      data = config[section]
+    except KeyError:
+      config.add_section(section)
+      data = config[section]
+    for key, value in section_data.items():
+      data[key] = str(value)
   with config_path.open('w') as config_file:
     config.write(config_file)
 
@@ -176,25 +202,8 @@ def del_config_section(config_path: Path, section: str) -> None:
     config.write(config_file)
 
 
-def read_config_section(
-    config_path: Path, section: str, types: Dict[str,type]=None
-) -> Dict[str,Any]:
-  data: Dict[str,Any] = {}
-  config = configparser.ConfigParser(interpolation=None)
-  try:
-    config.read(config_path)
-    if section not in config:
-      return data
-    for key, raw_value in config.items(section):
-      if types and key in types:
-        value = types[key](raw_value)
-      else:
-        value = raw_value
-      data[key] = value
-  except configparser.Error:
-    logging.critical(f'Error: Invalid config file format in {config_path!r}.')
-    raise
-  return data
+def get_fq_paths(outdir: Path) -> Tuple[Path,Path]:
+  return outdir/'reads_1.fastq', outdir/'reads_2.fastq'
 
 
 def download(acc: str, outdir: Path, threads: int=4, slurm_params: Dict[str,Any]=None) -> None:
@@ -362,6 +371,23 @@ def get_slurm_specifier(node: Optional[str], pick_node: bool=False):
     return ['-w', node]
   else:
     return ['-C', 'new']
+
+
+def get_git_info(git_dir: Path) -> Optional[Dict[str,Any]]:
+  cmd = (
+    'git', f'--work-tree={git_dir}', f'--git-dir={git_dir}/.git', 'log', '-n', '1', '--pretty=%ct %h'
+  )
+  try:
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, encoding='utf8')
+  except OSError:
+    return None
+  if result.returncode != 0:
+    return None
+  fields = result.stdout.split()
+  try:
+    return {'commit':int(fields[0]), 'timestamp':fields[1]}
+  except ValueError:
+    return None
 
 
 def run_command(cmd_raw: List, onerror: str='warn', exe: str=None) -> int:
