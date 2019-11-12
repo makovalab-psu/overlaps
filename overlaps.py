@@ -12,7 +12,7 @@ from utillib import simplewrap
 assert sys.version_info.major >= 3, 'Python 3 required'
 
 VALUES_TO_STRS = {None:'.'}
-ERROR_FIELDS = ('type', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2')
+ERROR_FIELDS = ('type', 'ref', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2')
 DESCRIPTION = simplewrap.wrap(f"""Use the overlap between paired-end reads to find sequencing errors.
 Currently only detects SNVs.
 Format of the --details (non--human) output is tab-delimited:
@@ -31,11 +31,12 @@ There are two types of lines. Each line's type is indicated in the first column.
 pair described in the preceding 'pair' line. The columns are:
 1. 'error'
 2. The type of error: 'snv', 'ins', or 'del'.
-3. The reference coordinate of the error.
-4. The coordinate of the error in read 1.
-5. The coordinate of the error in read 2.
-6. The allele present in read 1.
-7. The allele present in read 2.""")
+3. The name of the reference sequence the error is in.
+4. The reference coordinate of the error.
+5. The coordinate of the error in read 1.
+6. The coordinate of the error in read 2.
+7. The allele present in read 1.
+8. The allele present in read 2.""")
 
 
 def make_argparser():
@@ -246,6 +247,7 @@ def get_mismatches(pair):
       error = Error(
           type="snv",
           rname=read1.qname,
+          ref=read1.rname,
           coord1=read1_coord,
           coord2=read2_coord,
           ref_coord=ref_coord,
@@ -682,7 +684,7 @@ class Pair:
 
 
 class Error:
-  __slots__ = ('type', 'rname', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2')
+  __slots__ = ('type', 'rname', 'ref', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2')
   defaults = {'type':'snv'}
   def __init__(self, **kwargs):
     for name in self.__slots__:

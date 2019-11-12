@@ -4,11 +4,11 @@ pair	AC	True	24	25	0	0
 pair	AD	True	25	23	0	0
 pair	AE	True	25	25	0	0
 pair	BA	True	36	36	24	1
-error	snv	56	27	22	G	A
+error	snv	ref	56	27	22	G	A
 pair	BB	True	36	36	24	0
 pair	BC	True	36	36	23	0
 pair	BD	True	36	36	23	1
-error	snv	58	29	21	C	A
+error	snv	ref	58	29	21	C	A
 pair	BE	True	36	36	24	1
-error	snv	49	20	29	A	T
+error	snv	ref	49	20	29	A	T
 pair	CA	False	35	33	.	0
