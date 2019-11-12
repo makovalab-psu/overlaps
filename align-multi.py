@@ -9,7 +9,7 @@ from pathlib import Path
 import random
 import subprocess
 import sys
-from typing import List, Dict, Tuple, Optional, cast
+from typing import List, Dict, Tuple, Any, Union, Optional, cast
 from bfx import samreader
 assert sys.version_info.major >= 3, 'Python 3 required'
 
@@ -45,6 +45,10 @@ def make_argparser() -> argparse.ArgumentParser:
     help='Print the tallies of how many reads aligned to each sequence here. Format is one line '
       'per sequence, with two tab-delimited columns: the name of the sequence, and the number of '
       'reads that aligned to it.')
+  io.add_argument('-i', '--run-info', type=Path,
+    help='File to record data about the run, like what reference file was chosen. Format is tab-'
+      'delimited, with two columns: name, and value. If the file exists, only the values that '
+      'differ from the existing ones will be overwritten.')
   options = parser.add_argument_group('Options')
   options.add_argument('-N', '--name-sort', action='store_true',
     help='Sort the output BAM by name.')
@@ -111,6 +115,7 @@ def main(argv: List[str]) -> int:
   # Find the right reference file and align to it.
   ref_path = get_ref_path(best_seq, seqs_to_refs, args.refs_dir)
   logging.warning(f'Found {ref_path.name} to be the best reference choice.')
+  update_run_info(args.run_info, {'ref':ref_path.name})
   align(
     ref_path, args.fastq1, args.fastq2, out_path, threads=args.threads, name_sort=args.name_sort,
     clobber=args.clobber,
@@ -231,6 +236,55 @@ def is_good_alignment(
   if mapq_thres is not None and aln.mapq < mapq_thres:
     return False
   return True
+
+
+def update_run_info(run_info_path: Optional[Path], new_run_info: Dict[str,Any]) -> None:
+  if run_info_path is None:
+    return
+  run_info = read_run_info(run_info_path)
+  run_info.update(new_run_info)
+  write_run_info(run_info_path, run_info)
+
+
+def write_run_info(run_info_path: Path, run_info: Dict[str,Any]) -> None:
+  with run_info_path.open('w') as run_info_file:
+    for key, value in run_info.items():
+      if isinstance(value, list):
+        value_str = '\t'.join(map(str, value))
+      else:
+        value_str = str(value)
+      print(key, value, sep='\t', file=run_info_file)
+
+
+def read_run_info(run_info_path: Path) -> Dict[str,Any]:
+  run_info: Dict[str,Any] = {}
+  if not (run_info_path and run_info_path.is_file()):
+    return run_info
+  with run_info_path.open('r') as run_info_file:
+    for line in run_info_file:
+      fields = line.rstrip('\r\n').split('\t')
+      if len(fields) < 2:
+        logging.warning(f'Warning: Invalid line in --run-info: {line!r}')
+        continue
+      key = fields[0]
+      values = [parse_value(val) for val in fields[1:]]
+      if len(values) == 1:
+        run_info[key] = values[0]
+      else:
+        run_info[key] = values
+  return run_info
+
+
+def parse_value(value_str: str) -> Union[int,float,str]:
+  value: Union[int,float,str]
+  try:
+    value = int(value_str)
+  except ValueError:
+    try:
+      value = float(value_str)
+    except ValueError:
+      value = value_str
+  return value
 
 
 def fail(message: str, exit_code: int=1) -> None:

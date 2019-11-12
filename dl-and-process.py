@@ -239,7 +239,8 @@ def align(
   cmd: List = [
     SCRIPT_DIR/'align-multi.py', '--clobber', '--threads', threads, '--name-sort', '--keep-tmp',
     '--refs-dir', refs_dir, seqs_to_refs, meta_ref, fq1_path, fq2_path,
-    '--ref-counts', outdir/'ref-counts.tsv', '--output', outdir/'align.auto.bam'
+    '--ref-counts', outdir/'ref-counts.tsv', '--run-info', outdir/'metrics.tsv',
+    '--output', outdir/'align.auto.bam'
   ]
   if mapq is not None:
     cmd[1:1] = ['--mapq', mapq]
