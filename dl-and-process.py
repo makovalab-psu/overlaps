@@ -13,6 +13,7 @@ assert sys.version_info.major >= 3, 'Python 3 required'
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 TMP_DIR = Path('~/tmp').expanduser()
+FQ_NAMES = [Path('reads_1.fastq'), Path('reads_2.fastq')]
 DESCRIPTION = """Automatically download and analyze an SRA run."""
 
 
@@ -91,50 +92,73 @@ def main(argv: List[str]) -> int:
     begin = progress['end'].get('step', 0)+1
     init_progress_file(args.progress_file, begin, SCRIPT_DIR)
 
-  # Compute paths to intermediate files.
-  out_paths: Sequence[Sequence[Path]] = (
-    get_fq_paths(args.outdir),
-    (args.outdir/'align.auto.bam',),
-    (args.outdir/'errors.tsv',),
-    (args.outdir/'analysis.tsv',)
-  )
-
   # Describe each step and how to perform it.
   steps: Sequence[Dict[str,Any]] = (
     {  # Step 1: Download.
-      'fxn':download, 'args':(args.acc, args.outdir, args.dl_threads, slurm_params),
-      'outputs':out_paths[0],
+      'fxn':download,
+      'inputs':[],
+      'args':[args.acc, args.outdir, args.dl_threads, slurm_params],
+      'outputs':FQ_NAMES,
     },
     {  # Step 2: Align.
       'fxn':size_and_align,
-      'args':(
-        out_paths[0][0], out_paths[0][1], mem_params, args.outdir, args.refs_dir,
+      'inputs':[{'step':1, 'output':1, 'arg':1}, {'step':1, 'output':2, 'arg':2}],
+      'args':[
+        'dummy', 'dummy', mem_params, args.outdir, args.refs_dir,
         args.seqs_to_refs, args.meta_ref, args.mapq, args.min_ref_size, args.threads, args.acc,
         slurm_params
-      ),
-      'outputs':out_paths[1],
+      ],
+      'outputs':['align.auto.bam'],
     },
     {  # Step 3: Find errors in overlaps.
-      'fxn':overlap, 'args':(out_paths[1][0], args.outdir, args.mapq, slurm_params, args.acc),
-      'outputs':out_paths[2],
+      'fxn':overlap,
+      'inputs':[{'step':2, 'output':1, 'arg':1}],
+      'args':['dummy', args.outdir, args.mapq, slurm_params, args.acc],
+      'outputs':['errors.tsv'],
     },
     {  # Step 4: Calculate statistics on errors.
-      'fxn':analyze, 'args':(out_paths[2][0], args.outdir, args.acc, slurm_params),
-      'outputs':out_paths[3],
+      'fxn':analyze,
+      'inputs':[{'step':3, 'output':1, 'arg':1}],
+      'args':['dummy', args.outdir, args.acc, slurm_params],
+      'outputs':['analysis.tsv'],
     },
   )
 
+  run_steps(steps, begin, args.outdir, args.progress_file)
+
+  return 0
+
+
+def run_steps(steps: Sequence[Dict[str,Any]], begin: int, outdir: Path, progress_file: Path):
   # Execute each step.
   for step_num, step in enumerate(steps, 1):
     if begin > step_num:
       continue
     if step_num > 1:
       fail_if_bad_output(*steps[step_num-2]['outputs'])
-    step['fxn'](*step['args'])
+    args = insert_input_paths(steps, step['args'], step['inputs'], outdir)
+    step['fxn'](*args)
     fail_if_bad_output(*step['outputs'])
-    record_progress(args.progress_file, step_num)
+    record_progress(progress_file, step_num)
 
-  return 0
+
+def insert_input_paths(
+    steps: Sequence[Dict[str,Any]], args_raw: List[Any], inputs: Sequence[Dict[str,int]],
+    outdir: Path,
+  ) -> List[Any]:
+  args_list = args_raw.copy()
+  for input_ in inputs:
+    step_i = input_['step']-1
+    output_i = input_['output']-1
+    arg_i = input_['arg']-1
+    output_name = steps[step_i]['outputs'][output_i]
+    if args_list[arg_i] != 'dummy':
+      fail(
+        f'Problem with input file specification: argument {arg_i} of step {step_i} is '
+        f"{args_list[arg_i]!r}, not 'dummy'. (Attempted to replace it with {output_name!r}.)"
+      )
+    args_list[arg_i] = outdir/output_name
+  return args_list
 
 
 def init_progress_file(progress_file: Path, start: int, script_dir: Path) -> None:
@@ -202,10 +226,6 @@ def del_config_section(config_path: Path, section: str) -> None:
     config.write(config_file)
 
 
-def get_fq_paths(outdir: Path) -> Tuple[Path,Path]:
-  return outdir/'reads_1.fastq', outdir/'reads_2.fastq'
-
-
 def download(acc: str, outdir: Path, threads: int=4, slurm_params: Dict[str,Any]=None) -> None:
   cmd: List = ['fasterq-dump', '--threads', threads, '--temp', TMP_DIR, acc, '-o', outdir/'reads']
   if slurm_params is not None:
@@ -235,7 +255,7 @@ def align(
     min_ref_size: Optional[int], threads: int, slurm_params: Dict[str,Any]=None, mem_req: str=None,
     acc: str=None,
 ) -> None:
-  fq1_path, fq2_path = get_fq_paths(outdir)
+  fq1_path, fq2_path = [outdir/name for name in FQ_NAMES]
   cmd: List = [
     SCRIPT_DIR/'align-multi.py', '--clobber', '--threads', threads, '--name-sort', '--keep-tmp',
     '--refs-dir', refs_dir, seqs_to_refs, meta_ref, fq1_path, fq2_path,
