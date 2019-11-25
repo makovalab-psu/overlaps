@@ -129,6 +129,8 @@ def main(argv: List[str]) -> int:
   return 0
 
 
+########## MAIN HELPERS ##########
+
 def run_steps(steps: Sequence[Dict[str,Any]], begin: int, outdir: Path, progress_file: Path):
   # Execute each step.
   for step_num, step in enumerate(steps, 1):
@@ -226,6 +228,25 @@ def del_config_section(config_path: Path, section: str) -> None:
     config.write(config_file)
 
 
+def get_git_info(git_dir: Path) -> Optional[Dict[str,Any]]:
+  cmd = (
+    'git', f'--work-tree={git_dir}', f'--git-dir={git_dir}/.git', 'log', '-n', '1', '--pretty=%ct %h'
+  )
+  try:
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, encoding='utf8')
+  except OSError:
+    return None
+  if result.returncode != 0:
+    return None
+  fields = result.stdout.split()
+  try:
+    return {'commit':int(fields[0]), 'timestamp':fields[1]}
+  except ValueError:
+    return None
+
+
+########## STEPS ##########
+
 def download(acc: str, outdir: Path, threads: int=4, slurm_params: Dict[str,Any]=None) -> None:
   cmd: List = ['fasterq-dump', '--threads', threads, '--temp', TMP_DIR, acc, '-o', outdir/'reads']
   if slurm_params is not None:
@@ -307,6 +328,8 @@ def analyze(errors_path: Path, outdir: Path, acc: str, slurm_params: Dict[str,An
     cmd = ['srun', '-J', acc+':analyze', '--mem', '24G'] + specifier + cmd
   run_command(cmd, onerror='fail', exe='analyze.py')
 
+
+########## STEP HELPERS ##########
 
 def fail_if_bad_output(*paths: Path) -> None:
   for path in paths:
@@ -392,23 +415,6 @@ def get_slurm_specifier(node: Optional[str], pick_node: bool=False):
     return ['-w', node]
   else:
     return ['-C', 'new']
-
-
-def get_git_info(git_dir: Path) -> Optional[Dict[str,Any]]:
-  cmd = (
-    'git', f'--work-tree={git_dir}', f'--git-dir={git_dir}/.git', 'log', '-n', '1', '--pretty=%ct %h'
-  )
-  try:
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, encoding='utf8')
-  except OSError:
-    return None
-  if result.returncode != 0:
-    return None
-  fields = result.stdout.split()
-  try:
-    return {'commit':int(fields[0]), 'timestamp':fields[1]}
-  except ValueError:
-    return None
 
 
 def run_command(cmd_raw: List, onerror: str='warn', exe: str=None) -> int:
