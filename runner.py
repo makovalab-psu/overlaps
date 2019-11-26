@@ -31,6 +31,8 @@ def make_argparser() -> argparse.ArgumentParser:
   io.add_argument('job_config', metavar='slurm-wait-job.ini', type=Path,
     help='Control the pace of the subprocesses with slurm-wait.py.')
   options = parser.add_argument_group('Options')
+  options.add_argument('-b', '--begin', type=int,
+    help='Start jobs at this step instead of the beginning.')
   options.add_argument('-t', '--threads', type=int, default=32,
     help='Default: %(default)s')
   options.add_argument('-T', '--dl-threads', type=int, default=4,
@@ -86,7 +88,8 @@ def main(argv: List[str]) -> Optional[int]:
       pass
     print(f'Launching {next_acc}')
     launch_job(
-      next_acc, args.parent_dir, args.job_config, args.threads, args.dl_threads, args.pick_node
+      next_acc, args.parent_dir, args.job_config, args.threads, args.dl_threads, args.pick_node,
+      args.begin,
     )
     launched.append(next_acc)
     write_list_to_file(args.launched, launched)
@@ -146,7 +149,8 @@ def wait_for_node(config_path: Path, threads: int, last_acc: str=None) -> Union[
 
 
 def launch_job(
-    acc: str, parent_dir: Path, config: Path, threads: int, dl_threads: int, pick_node: bool
+    acc: str, parent_dir: Path, config: Path, threads: int, dl_threads: int, pick_node: bool,
+    begin: Optional[int],
   ) -> None:
   run_dir = parent_dir/'runs'/acc
   cmd_raw = cast(list, [SCRIPT_DIR/'dl-and-process.py']) + JOB_ARGS + [
@@ -156,6 +160,8 @@ def launch_job(
   ]
   if pick_node:
     cmd_raw.insert(1, '--pick-node')
+  if begin:
+    cmd_raw[1:1] = ['--begin', begin]
   cmd = list(map(str, cmd_raw))
   print('$ '+' '.join(cmd))
   out_log = run_dir/'dl-and-process.out.log'
