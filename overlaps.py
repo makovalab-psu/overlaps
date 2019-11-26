@@ -13,7 +13,8 @@ assert sys.version_info.major >= 3, 'Python 3 required'
 
 VALUES_TO_STRS = {None:'.'}
 ERROR_FIELDS = ('type', 'ref', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2')
-DESCRIPTION = simplewrap.wrap(f"""Use the overlap between paired-end reads to find sequencing errors.
+DESCRIPTION = simplewrap.wrap(
+f"""Use the overlap between paired-end reads to find sequencing errors.
 Currently only detects SNVs.
 Format of the --details (non--human) output is tab-delimited:
 Null values are indicated by '{VALUES_TO_STRS.get(None, None)}', and boolean values by \
@@ -36,7 +37,8 @@ pair described in the preceding 'pair' line. The columns are:
 5. The coordinate of the error in read 1.
 6. The coordinate of the error in read 2.
 7. The allele present in read 1.
-8. The allele present in read 2.""")
+8. The allele present in read 2."""
+)
 
 
 def make_argparser():
