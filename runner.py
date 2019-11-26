@@ -130,12 +130,10 @@ def subtract_lists(list1: list, *lists) -> list:
 def wait_for_node(config_path: Path, threads: int, last_acc: str=None) -> Union[str,bool,None]:
   cmd_raw: list = ['slurm-wait.py', '--config', config_path, '--cpus', threads]
   if last_acc:
-    #TODO: This could be caught in an infinite loop if the download for the last job finishes too
-    #      quickly or this script gets held up (perhaps because of one failed slurm-wait.py command).
+    #TODO: This could be caught in an infinite loop if the last job finishes too quickly or this
+    #      script gets held up (perhaps because of one failed slurm-wait.py command).
     #      Make sure to check whether the job already finished.
-    #TODO: Also, do I want to allow for re-running incomplete jobs? Then the download step will be
-    #      skipped entirely.
-    cmd_raw += ['--wait-for-job', last_acc+':download']
+    cmd_raw += ['--wait-for-job-prefix', last_acc+':']
   cmd = list(map(str, cmd_raw))
   result = subprocess.run(cmd, stdout=subprocess.PIPE, encoding='utf8')
   if result.returncode != 0:
