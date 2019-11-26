@@ -5,16 +5,20 @@ import configparser
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple, Mapping, Sequence, Any, Union, Optional, cast
+from typing import Dict, List, Tuple, Mapping, Sequence, Generator, Any, Union, Optional, cast
 import subprocess
 import sys
 import time
 assert sys.version_info.major >= 3, 'Python 3 required'
 
+Scalar = Union[str,int,float]
 SCRIPT_DIR = Path(__file__).resolve().parent
 TMP_DIR = Path('~/tmp').expanduser()
 FQ_NAMES = [Path('reads_1.fastq'), Path('reads_2.fastq')]
 DESCRIPTION = """Automatically download and analyze an SRA run."""
+
+class FormatError(Exception):
+  pass
 
 
 def make_argparser() -> argparse.ArgumentParser:
@@ -35,6 +39,8 @@ def make_argparser() -> argparse.ArgumentParser:
     help='Minimum MAPQ required when examining aligned reads.')
   params.add_argument('--min-ref-size', type=int,
     help='Minimum size of reference sequence to consider when choosing between them.')
+  params.add_argument('-c', '--context', type=int, default=20,
+    help='How much sequence context to extract around each error.')
   options = parser.add_argument_group('Options')
   options.add_argument('-b', '--begin', type=int,
     help='Start at this step instead of the beginning.')
@@ -83,14 +89,21 @@ def main(argv: List[str]) -> int:
     slurm_params = {'pick_node':args.pick_node}
     if args.wait_config:
       slurm_params['config'] = args.wait_config
-  if args.begin:
-    begin = args.begin
-  else:
-    begin = 1
+  begin = None
   if args.progress_file and args.progress_file.is_file():
     progress = read_config(args.progress_file, {'step':int, 'timestamp':int})
-    begin = progress['end'].get('step', 0)+1
+    if args.begin:
+      begin = args.begin
+    elif isinstance(dict_get(progress, 'end', 'step'), int):
+      begin = progress['end']['step']
+    else:
+      begin = 1
     init_progress_file(args.progress_file, begin, SCRIPT_DIR)
+  if not begin:
+    if args.begin:
+      begin = args.begin
+    else:
+      begin = 1
 
   # Describe each step and how to perform it.
   steps: Sequence[Dict[str,Any]] = (
@@ -116,10 +129,16 @@ def main(argv: List[str]) -> int:
       'args':['dummy', args.outdir, args.mapq, slurm_params, args.acc],
       'outputs':['errors.tsv'],
     },
-    {  # Step 4: Calculate statistics on errors.
+    {  # Step 4: Extract the sequence context from the reference.
+      'fxn':get_context,
+      'inputs':[{'step':3, 'output':1, 'arg':1}, {'step':4, 'output':1, 'arg':4}],
+      'args':['dummy', args.outdir/'metrics.tsv', args.refs_dir, 'dummy', args.context],
+      'outputs':['seq-context.tsv']
+    },
+    {  # Step 5: Calculate statistics on errors.
       'fxn':analyze,
-      'inputs':[{'step':3, 'output':1, 'arg':1}],
-      'args':['dummy', args.outdir, args.acc, slurm_params],
+      'inputs':[{'step':3, 'output':1, 'arg':1}, {'step':5, 'output':1, 'arg':2}],
+      'args':['dummy', 'dummy', args.acc, slurm_params],
       'outputs':['analysis.tsv'],
     },
   )
@@ -137,10 +156,10 @@ def run_steps(steps: Sequence[Dict[str,Any]], begin: int, outdir: Path, progress
     if begin > step_num:
       continue
     if step_num > 1:
-      fail_if_bad_output(*steps[step_num-2]['outputs'])
+      fail_if_bad_output(outdir, *steps[step_num-2]['outputs'])
     args = insert_input_paths(steps, step['args'], step['inputs'], outdir)
     step['fxn'](*args)
-    fail_if_bad_output(*step['outputs'])
+    fail_if_bad_output(outdir, *step['outputs'])
     record_progress(progress_file, step_num)
 
 
@@ -228,6 +247,19 @@ def del_config_section(config_path: Path, section: str) -> None:
     config.write(config_file)
 
 
+def dict_get(d: Mapping, *keys: Any) -> Optional[Any]:
+  current_value = d
+  for key in keys:
+    try:
+      if key in current_value:
+        current_value = current_value[key]
+      else:
+        return None
+    except TypeError:
+      return None
+  return current_value
+
+
 def get_git_info(git_dir: Path) -> Optional[Dict[str,Any]]:
   cmd = (
     'git', f'--work-tree={git_dir}', f'--git-dir={git_dir}/.git', 'log', '-n', '1', '--pretty=%ct %h'
@@ -240,7 +272,7 @@ def get_git_info(git_dir: Path) -> Optional[Dict[str,Any]]:
     return None
   fields = result.stdout.split()
   try:
-    return {'commit':int(fields[0]), 'timestamp':fields[1]}
+    return {'timestamp':int(fields[0]), 'commit':fields[1]}
   except ValueError:
     return None
 
@@ -317,9 +349,31 @@ def overlap(
   run_command(cmd, onerror='fail', exe='overlaps.py')
 
 
-def analyze(errors_path: Path, outdir: Path, acc: str, slurm_params: Dict[str,Any]=None) -> None:
+def get_context(
+    errors_path: Path, metrics_path: Path, refs_dir: Path, out_path: Path, con_size: int
+  ):
+  metrics = read_metrics(metrics_path)
+  ref_path = refs_dir/metrics['ref']
+  cmd_raw: List = [
+    'getcontext.py', ref_path, '--chrom-field', 1, '--coord-field', 2, '--window', con_size,
+    '--output', out_path
+  ]
+  cmd = list(map(str, cmd_raw))
+  logging.warning('+ $ '+' '.join(cmd))
+  process = subprocess.Popen(cmd, stdin=subprocess.PIPE, encoding='utf8')
+  for ref, coord in extract_sites(errors_path):
+    process.stdin.write(f'{ref}\t{coord}\n')
+  process.stdin.close()
+  exit_code = process.wait()
+  if exit_code!= 0:
+    fail(f'getcontext.py failed with exit code {exit_code}.')
+
+
+def analyze(
+    errors_path: Path, analysis_path: Path, acc: str, slurm_params: Dict[str,Any]=None
+  ) -> None:
   cmd: List = [
-    SCRIPT_DIR/'analyze.py', '--tsv', '--errors', acc, errors_path, '--output', outdir/'analysis.tsv'
+    SCRIPT_DIR/'analyze.py', '--tsv', '--errors', acc, errors_path, '--output', analysis_path
   ]
   if slurm_params is not None:
     if 'config' in slurm_params:
@@ -330,14 +384,6 @@ def analyze(errors_path: Path, outdir: Path, acc: str, slurm_params: Dict[str,An
 
 
 ########## STEP HELPERS ##########
-
-def fail_if_bad_output(*paths: Path) -> None:
-  for path in paths:
-    if not path.is_file():
-      fail(f'Error: File {str(path)!r} not found.')
-    if os.path.getsize(path) == 0:
-      fail(f'Error: File {str(path)!r} is empty.')
-
 
 def get_fq_size(fq1_path: Path, fq2_path: Path) -> Tuple[Optional[int],Optional[int]]:
   cmd = ('bioawk', '-c', 'fastx', '{tot+=length($seq)} END {print tot}', fq1_path, fq2_path)
@@ -391,6 +437,64 @@ def format_mem_req(mem_bytes: int) -> str:
   return f'{mem_kb}K'
 
 
+def extract_sites(errors_path: Path) -> Generator[Tuple[str,int],None,None]:
+  with errors_path.open() as errors_file:
+    for line_raw in errors_file:
+      line = line_raw.rstrip('\r\n')
+      if not line:
+        continue
+      fields = line.split('\t')
+      if fields[0] != 'error':
+        continue
+      if len(fields) != 8:
+        raise FormatError(
+          f'Errors file {str(errors_path)!r} has wrong number of fields on line: {line_raw!r}.'
+        )
+      ref = fields[2]
+      try:
+        coord = int(fields[3])
+      except ValueError:
+        raise FormatError(
+          f'Errors file {str(errors_path)!r} has invalid coordinate on line: {line_raw!r}'
+        )
+      yield ref, coord
+
+
+def read_metrics(metrics_path: Path) -> Dict[str,Any]:
+  metrics = {}
+  with metrics_path.open() as metrics_file:
+    for line_raw in metrics_file:
+      line = line_raw.rstrip('\r\n')
+      if not line:
+        continue
+      fields = line.split('\t')
+      value: Union[Scalar,List[Scalar]]
+      if len(fields) < 2:
+        raise FormatError(
+          f'Invalid format in {str(metrics_path)!r}: Too few fields in line {line_raw!r}'
+        )
+      elif len(fields) == 2:
+        key = fields[0]
+        value = parse_value(fields[1])
+      elif len(fields) > 2:
+        key = fields[0]
+        value = [parse_value(raw) for raw in fields[1:]]
+      metrics[key] = value
+  return metrics
+
+
+def parse_value(raw_value: str) -> Scalar:
+  value: Union[str,int,float]
+  try:
+    value = int(raw_value)
+  except ValueError:
+    try:
+      value = float(raw_value)
+    except ValueError:
+      value = raw_value
+  return value
+
+
 def slurm_wait(config: Path=None, cpus: int=None, mem: str=None) -> Optional[str]:
   cmd_raw: List[Any] = ['slurm-wait.py']
   if config:
@@ -430,6 +534,15 @@ def run_command(cmd_raw: List, onerror: str='warn', exe: str=None) -> int:
     elif onerror == 'fail':
       fail(message)
   return result.returncode
+
+
+def fail_if_bad_output(outdir: Path, *filenames: str) -> None:
+  for filename in filenames:
+    path = outdir/filename
+    if not path.is_file():
+      fail(f'Error: File {str(path)!r} not found.')
+    if os.path.getsize(path) == 0:
+      fail(f'Error: File {str(path)!r} is empty.')
 
 
 def fail(message: str) -> None:
