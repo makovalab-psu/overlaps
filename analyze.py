@@ -95,11 +95,12 @@ def parse_pair_line(fields):
 def parse_error_line(fields):
   return {
     'type': fields[1],
-    'ref_coord': parse_value(fields[2]),
-    'coord1': parse_value(fields[3]),
-    'coord2': parse_value(fields[4]),
-    'alt1': fields[5],
-    'alt2': fields[6],
+    'ref': fields[2],
+    'ref_coord': parse_value(fields[3]),
+    'coord1': parse_value(fields[4]),
+    'coord2': parse_value(fields[5]),
+    'alt1': fields[6],
+    'alt2': fields[7],
   }
 
 
