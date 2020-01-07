@@ -13,15 +13,20 @@ assert sys.version_info.major >= 3, 'Python 3 required'
 
 DESCRIPTION = """"""
 
+# Note: This is based on code from Jupyter notebooks, especially
+# 2020-01-03-ecoli-auto-seq-context.ipynb and 2019-12-17-ecoli-auto-seq-context-debug.ipynb.
+
 
 def make_argparser():
   parser = argparse.ArgumentParser(add_help=False, description=DESCRIPTION)
   options = parser.add_argument_group('Options')
   options.add_argument('errors_path', metavar='errors.tsv', type=pathlib.Path,
-    help='')
+    help='File containing data on intra-pair errors.')
   options.add_argument('context_path', metavar='seq-context.tsv', type=pathlib.Path,
-    help='')
-  options.add_argument('-o', '--output', type=argparse.FileType('w'), default=sys.stdout)
+    help='File containing data on reference sequence context near errors.')
+  options.add_argument('-o', '--output', type=argparse.FileType('w'), default=sys.stdout,
+    help='Destination file for output. Warning: Any existing file will be overwritten. '
+      'Default: stdout')
   options.add_argument('-h', '--help', action='help',
     help='Print this argument help text and exit.')
   logs = parser.add_argument_group('Logging')
@@ -44,7 +49,7 @@ def main(argv):
 
   counts_by_substitution = get_base_counts_by_substitution(args.errors_path, args.context_path)
 
-  for data in collate_count_lines(counts_by_substitution):
+  for data in make_table(counts_by_substitution):
     print(*data, sep='\t', file=args.output)
 
 
@@ -249,7 +254,7 @@ def call_base(error_list, ref_base=None):
     raise RuntimeError(f'Invalid state: len(top_bases) < 1 ({top_bases})')
 
 
-def collate_count_lines(counts_by_substitution):
+def make_table(counts_by_substitution):
   for (before_base, after_base), counts_by_pos in counts_by_substitution.items():
     for pos, counts_by_base in counts_by_pos.items():
       for ref_base, count in counts_by_base.items():
