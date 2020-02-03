@@ -4,6 +4,7 @@ import collections
 import configparser
 import logging
 import os
+import requests
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ Progress = Mapping[str,Mapping[str,Scalar]]
 PROGRESS_TYPES: Dict[str,type] = {
   'start_step':int, 'start_time':int, 'end_step':int, 'end_time':int, 'commit_time':int,
 }
+EBI_SRA_URL = 'https://www.ebi.ac.uk/ena/data/warehouse/filereport?result=read_run&fields=fastq_ftp&accession='
 SCRIPT_DIR = Path(__file__).resolve().parent
 TMP_DIR = Path('~/tmp').expanduser()
 FQ_NAMES = [Path('reads_1.fastq'), Path('reads_2.fastq')]
@@ -50,8 +52,6 @@ def make_argparser() -> argparse.ArgumentParser:
     help='Start at this step instead of the beginning.')
   options.add_argument('-t', '--threads', type=int, default=1,
     help='Number of threads to use when aligning to the reference. Default: %(default)s')
-  options.add_argument('-T', '--dl-threads', type=int, default=4,
-    help='Number of threads to use when downloading from SRA. Default: %(default)s')
   options.add_argument('-S', '--slurm', action='store_true',
     help='Run subcommands on Slurm cluster.')
   options.add_argument('-w', '--wait-config', type=Path,
@@ -119,7 +119,7 @@ def main(argv: List[str]) -> int:
     {  # Step 1: Download.
       'fxn':download,
       'inputs':[],
-      'args':[args.acc, args.outdir, args.dl_threads, slurm_params],
+      'args':[args.acc, args.outdir, slurm_params],
       'outputs':FQ_NAMES,
     },
     {  # Step 2: Align.
@@ -370,16 +370,18 @@ def get_git_info(git_dir: Path) -> Optional[Dict[str,Any]]:
 
 ########## STEPS ##########
 
-def download(acc: str, outdir: Path, threads: int=4, slurm_params: Dict[str,Any]=None) -> None:
-  cmd: List = ['fasterq-dump', '--threads', threads, '--temp', TMP_DIR, acc, '-o', outdir/'reads']
-  if slurm_params is not None:
-    if 'config' in slurm_params:
-      node = slurm_wait(config=slurm_params['config'], cpus=threads, mem='10G')
-      specifier = get_slurm_specifier(node, slurm_params['pick_node'])
-    cmd = [
-      'srun', '-J', acc+':download', '--cpus-per-task', threads, '--mem', '10G'
-    ] + specifier + cmd
-  run_command(cmd, onerror='fail', exe='fasterq-dump')
+def download(acc: str, outdir: Path, slurm_params: Dict[str,Any]=None) -> None:
+  for i, url in enumerate(get_ftp_urls(acc), 1):
+    cmd: List = ['curl', '--silent', '--show-error', url]
+    if slurm_params is not None:
+      if 'config' in slurm_params:
+        node = slurm_wait(config=slurm_params['config'], cpus=1, mem='10G')
+        specifier = get_slurm_specifier(node, slurm_params['pick_node'])
+      cmd = ['srun', '-J', acc+':download', '--mem', '10G'] + specifier + cmd
+    proc1 = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    with (outdir/f'reads_{i}.fastq').open('w') as fq_file:
+      proc2 = subprocess.Popen(['gunzip', '-c', '-'], stdin=proc1.stdout, stdout=fq_file)
+      run_pipeline((proc1, proc2), onerror='fail', exes=('curl', 'gunzip'))
 
 
 def size_and_align(fq1_path: Path, fq2_path: Path, mem_params: Dict[str,int], outdir: Path,
@@ -475,6 +477,51 @@ def analyze(
 
 
 ########## STEP HELPERS ##########
+
+
+def get_ftp_urls(accession: str) -> List[str]:
+  ftp_urls: List[str] = []
+  url = EBI_SRA_URL+accession
+  response = make_request(url)
+  for line_num, line in enumerate(response.text.splitlines(), 1):
+    if line_num == 1:
+      if line != 'fastq_ftp':
+        raise FormatError(f'Invalid response from {url!r}: wrong first line ({line!r})')
+    elif line_num == 2:
+      fields = line.split(';')
+      if len(fields) == 2 and all([u.startswith('ftp.sra.ebi.ac.uk') for u in fields]):
+        ftp_urls = ['ftp://'+u for u in fields]
+      else:
+        raise FormatError(f'Invalid response from {url!r}: bad second line ({line!r})')
+    else:
+      if line_num == 3:
+        logging.warning(f'Extra lines in response from {url!r}:')
+      if 3 <= line_num < 10:
+        logging.warning(f'  {line}')
+      elif line_num == 10:
+        logging.warning(f'  ...')
+  return ftp_urls
+
+
+def make_request(url: str, retry_wait=5, max_tries=5) -> requests.models.Response:
+  response = None
+  tries = 0
+  while response is None:
+    tries += 1
+    try:
+      response = requests.get(url)
+    except requests.exceptions.RequestException as error:
+      logging.error(f'Error: Issue with HTTP request to {url!r}: {error}')
+    if response is not None and response.status_code != 200:
+      logging.error(f'Error: HTTP {response.status_code} returned from {url!r}')
+      response = None
+    if response is None:
+      if tries >= max_tries:
+        raise RuntimeError(f'Failed to request {url!r}')
+      time.sleep(retry_wait)
+      retry_wait *= 4
+  return response
+
 
 def get_fq_size(fq1_path: Path, fq2_path: Path) -> Tuple[Optional[int],Optional[int]]:
   cmd = ('bioawk', '-c', 'fastx', '{tot+=length($seq)} END {print tot}', fq1_path, fq2_path)
@@ -616,15 +663,32 @@ def run_command(cmd_raw: List, onerror: str='warn', exe: str=None) -> int:
   cmd: List[str] = list(map(str, cmd_raw))
   logging.warning('+ $ '+' '.join(cmd))
   result = subprocess.run(cmd)
-  if result.returncode != 0:
-    if exe is None:
-      exe = os.path.basename(cmd[0])
-    message = f'{exe} failed with exit code {result.returncode}.'
-    if onerror == 'warn':
-      logging.warning('Warning: '+message)
-    elif onerror == 'fail':
-      fail(message)
+  warn_or_fail(result.returncode, onerror, cmd[0], exe)
   return result.returncode
+
+
+def run_pipeline(procs: Sequence, onerror='warn', exes: Sequence[Optional[str]]=None):
+  if exes is None:
+    exes = [None]*len(procs)
+  elif len(exes) != len(procs):
+    raise RuntimeError(f'exes list must be as long as procs list. Received {exes!r}')
+  procs[0].stdout.close()
+  for proc, exe in zip(procs, exes):
+    return_code = proc.wait()
+    warn_or_fail(return_code, onerror, proc.args[0], exe)
+  return return_code
+
+
+def warn_or_fail(return_code: int, onerror: str, arg0: str, exe: str=None):
+  if return_code == 0:
+    return
+  if exe is None:
+    exe = os.path.basename(arg0)
+  message = f'{exe} failed with exit code {return_code}.'
+  if onerror == 'warn':
+    logging.warning(f'Warning: {message}')
+  elif onerror == 'fail':
+    fail(message)
 
 
 def fail_if_bad_output(outdir: Path, *filenames: str) -> None:
