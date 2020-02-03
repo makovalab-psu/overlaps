@@ -4,14 +4,18 @@ import collections
 import configparser
 import logging
 import os
-from pathlib import Path
-from typing import Dict, List, Tuple, Mapping, Sequence, Generator, Any, Union, Optional, cast
 import subprocess
 import sys
 import time
+from pathlib import Path
+from typing import Dict, List, Tuple, Mapping, Sequence, Generator, Any, Union, Optional, cast
 assert sys.version_info.major >= 3, 'Python 3 required'
 
 Scalar = Union[str,int,float]
+Progress = Mapping[str,Mapping[str,Scalar]]
+PROGRESS_TYPES: Dict[str,type] = {
+  'start_step':int, 'start_time':int, 'end_step':int, 'end_time':int, 'commit_time':int,
+}
 SCRIPT_DIR = Path(__file__).resolve().parent
 TMP_DIR = Path('~/tmp').expanduser()
 FQ_NAMES = [Path('reads_1.fastq'), Path('reads_2.fastq')]
@@ -89,21 +93,26 @@ def main(argv: List[str]) -> int:
     slurm_params = {'pick_node':args.pick_node}
     if args.wait_config:
       slurm_params['config'] = args.wait_config
+  # Figure out what step to begin on.
   begin = None
-  if args.progress_file and args.progress_file.is_file():
-    progress = read_config(args.progress_file, {'step':int, 'timestamp':int})
-    if args.begin:
-      begin = args.begin
-    elif isinstance(dict_get(progress, 'end', 'step'), int):
-      begin = progress['end']['step']
-    else:
-      begin = 1
-    init_progress_file(args.progress_file, begin, SCRIPT_DIR)
+  if args.begin:
+    begin = args.begin
+    logging.info(f'Info: Starting at step {begin}, as directed by --begin.')
+  elif args.progress_file and args.progress_file.is_file():
+    logging.info('About to get begin from progress.')
+    progress = read_progress(args.progress_file)
+    last_end = get_last_step(progress)
+    if isinstance(last_end, int):
+      begin = last_end+1
+      logging.info(
+        f'Info: Starting at step {begin}, the step after the last recorded completed step.'
+      )
   if not begin:
-    if args.begin:
-      begin = args.begin
-    else:
-      begin = 1
+    begin = 1
+    logging.info(f'Starting at step {begin} by default.')
+  # Write starting data to progress file
+  if args.progress_file:
+    init_progress_file(args.progress_file, begin, SCRIPT_DIR)
 
   # Describe each step and how to perform it.
   steps: Sequence[Dict[str,Any]] = (
@@ -183,24 +192,92 @@ def insert_input_paths(
 
 
 def init_progress_file(progress_file: Path, start: int, script_dir: Path) -> None:
-  data = {'start': {'step':start, 'when':int(time.time())}}
+  progress = read_progress(progress_file)
+  last_run = get_last_run(progress)
+  if last_run is None:
+    run = 1
+  else:
+    run = last_run+1
+  section = {
+    'start_step': start,
+    'start_time': int(time.time())
+  }
   git_info = get_git_info(script_dir)
   if git_info is None:
     logging.warning(f'Warning: Failed to find git commit info in {script_dir}')
   else:
-    data['version'] = git_info
-  update_config(progress_file, data)
-  del_config_section(progress_file, 'end')
+    section['commit'] = git_info['commit']
+    section['commit_time'] = git_info['timestamp']
+  progress[f'run{run}'] = section
+  write_config(progress_file, progress)
 
 
 def record_progress(progress_path: Optional[Path], step: int) -> None:
   if progress_path is None:
     return
-  update_config(progress_path, {'end': {'step':step, 'when':int(time.time())}})
+  progress = read_progress(progress_path)
+  last_run = get_last_run(progress)
+  new_data = {
+    f'run{last_run}': {
+      'step': step,
+      'when': int(time.time())
+    }
+  }
+  update_config(progress_path, new_data)
 
 
-def read_config(config_path: Path, types: Dict[str,type]=None) -> Mapping[str,Dict[str,Any]]:
-  data: Mapping[str,Dict[str,Any]] = collections.defaultdict(dict)
+def get_last_step(progress):
+  last_run = get_last_run(progress)
+  if last_run is None:
+    return None
+  last_section = progress.get(f'run{last_run}')
+  if last_section:
+    return last_section.get('end_step')
+  else:
+    return None
+
+
+def get_last_run(progress):
+  last_run = None
+  for section in progress.keys():
+    if section.startswith('run'):
+      run = int(section[3:])
+      if last_run is None or run > last_run:
+        last_run = run
+  return last_run
+
+
+def read_progress(progress_path: Path) -> Progress:
+  raw_progress = read_config(progress_path, PROGRESS_TYPES)
+  return convert_progress(raw_progress)
+
+
+def convert_progress(progress: Progress) -> Progress:
+  """Convert old progress structure to the new one, if necessary."""
+  if any([section.startswith('run') for section in progress.keys()]):
+    # It's the new format.
+    return progress
+  mapping = {
+    ('start', 'step'): 'start_step',
+    ('start', 'when'): 'start_time',
+    ('end', 'step'): 'end_step',
+    ('end', 'when'): 'end_time',
+    ('version', 'timestamp'): 'commit_time',
+    ('version', 'commit'): 'commit',
+  }
+  run0 = {}
+  for section_name, section in progress.items():
+    for key, value in section.items():
+      new_key = mapping.get((section_name, key), f'{section_name}_{key}')
+      run0[new_key] = value
+  if run0:
+    return {'run0':run0}
+  else:
+    return {}
+
+
+def read_config(config_path: Path, types: Dict[str,type]=None) -> Progress:
+  data: Progress = {}
   config = configparser.ConfigParser(interpolation=None)
   try:
     config.read(config_path)
@@ -210,14 +287,17 @@ def read_config(config_path: Path, types: Dict[str,type]=None) -> Mapping[str,Di
           value = types[key](raw_value)
         else:
           value = raw_value
-        data[section][key] = value
+        try:
+          data[section][key] = value
+        except KeyError:
+          data[section] = {key:value}
   except configparser.Error:
     logging.critical(f'Error: Invalid config file format in {config_path!r}.')
     raise
   return data
 
 
-def update_config(config_path: Path, new_data: Dict[str,Dict[str,Any]]) -> None:
+def update_config(config_path: Path, new_data: Progress) -> None:
   config = configparser.ConfigParser(interpolation=None)
   if config_path.is_file():
     config.read(config_path)
@@ -230,6 +310,17 @@ def update_config(config_path: Path, new_data: Dict[str,Dict[str,Any]]) -> None:
       data = config[section]
     for key, value in section_data.items():
       data[key] = str(value)
+  with config_path.open('w') as config_file:
+    config.write(config_file)
+
+
+def write_config(config_path: Path, data: Progress) -> None:
+  config = configparser.ConfigParser(interpolation=None)
+  for section_name, section_data in data.items():
+    config.add_section(section_name)
+    section = config[section_name]
+    for key, value in section_data.items():
+      section[key] = str(value)
   with config_path.open('w') as config_file:
     config.write(config_file)
 
