@@ -480,7 +480,7 @@ def summarize_context(
     if 'config' in slurm_params:
       node = slurm_wait(config=slurm_params['config'], cpus=1, mem='24G')
       specifier = get_slurm_specifier(node, slurm_params['pick_node'])
-    cmd = ['srun', '-J', f'{acc}:overlaps', '--mem', '16G'] + specifier + cmd
+    cmd = ['srun', '-J', f'{acc}:sumcontext', '--mem', '16G'] + specifier + cmd
   run_command(cmd, onerror='fail', exe='summarize-context.py')
 
 

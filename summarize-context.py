@@ -103,7 +103,6 @@ def tuple_eq(tup1, tup2):
 
 Context = collections.namedtuple('Context', ('chr', 'pos', 'index', 'base', 'seq', 'gc'))
 Context.__eq__ = tuple_eq
-Context.__str__ = format_context
 
 
 def read_context(context_path):
