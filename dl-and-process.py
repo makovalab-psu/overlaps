@@ -144,9 +144,18 @@ def main(argv: List[str]) -> int:
       'args':['dummy', args.outdir/'metrics.tsv', args.refs_dir, 'dummy', args.context],
       'outputs':['seq-context.tsv']
     },
-    {  # Step 5: Calculate statistics on errors.
+    {  # Step 5: Summarize sequence context.
+      'fxn':summarize_context,
+      'inputs':[
+        {'step':3, 'output':1, 'arg':1}, {'step':4, 'output':1, 'arg':2},
+        {'step':5, 'output':1, 'arg':3}
+      ],
+      'args':['dummy', 'dummy', 'dummy', slurm_params, args.acc],
+      'outputs':['seq-context-summary.tsv'],
+    },
+    {  # Step 6: Calculate statistics on errors.
       'fxn':analyze,
-      'inputs':[{'step':3, 'output':1, 'arg':1}, {'step':5, 'output':1, 'arg':2}],
+      'inputs':[{'step':3, 'output':1, 'arg':1}, {'step':6, 'output':1, 'arg':2}],
       'args':['dummy', 'dummy', args.acc, slurm_params],
       'outputs':['analysis.tsv'],
     },
@@ -443,8 +452,8 @@ def overlap(
 
 
 def get_context(
-    errors_path: Path, metrics_path: Path, refs_dir: Path, out_path: Path, con_size: int
-  ):
+    errors_path: Path, metrics_path: Path, refs_dir: Path, out_path: Path, con_size: int,
+) -> None:
   metrics = read_metrics(metrics_path)
   ref_path = refs_dir/metrics['ref']
   cmd_raw: List = [
@@ -460,6 +469,19 @@ def get_context(
   exit_code = process.wait()
   if exit_code!= 0:
     fail(f'getcontext.py failed with exit code {exit_code}.')
+
+
+def summarize_context(
+    errors_path: Path, context_path: Path, out_path: Path, slurm_params: Dict[str,Any]=None,
+    acc: str=None,
+) -> None:
+  cmd: List = [SCRIPT_DIR/'summarize-context.py', errors_path, context_path, '--output', out_path]
+  if slurm_params is not None:
+    if 'config' in slurm_params:
+      node = slurm_wait(config=slurm_params['config'], cpus=1, mem='24G')
+      specifier = get_slurm_specifier(node, slurm_params['pick_node'])
+    cmd = ['srun', '-J', f'{acc}:overlaps', '--mem', '16G'] + specifier + cmd
+  run_command(cmd, onerror='fail', exe='summarize-context.py')
 
 
 def analyze(

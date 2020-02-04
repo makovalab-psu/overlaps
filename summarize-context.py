@@ -11,22 +11,24 @@ from matplotlib import pyplot
 from typing import Dict, List
 assert sys.version_info.major >= 3, 'Python 3 required'
 
-DESCRIPTION = """"""
+DESCRIPTION = """Produce statistics on the sequence context surrounding every error in a sample.
+This will count how often each base appears at each position relative to the site of each error."""
 
 # Note: This is based on code from Jupyter notebooks, especially
-# 2020-01-03-ecoli-auto-seq-context.ipynb and 2019-12-17-ecoli-auto-seq-context-debug.ipynb.
+# 2019-12-17-ecoli-auto-seq-context-debug.ipynb.
 
 
 def make_argparser():
   parser = argparse.ArgumentParser(add_help=False, description=DESCRIPTION)
-  options = parser.add_argument_group('Options')
-  options.add_argument('errors_path', metavar='errors.tsv', type=pathlib.Path,
+  io = parser.add_argument_group('Options')
+  io.add_argument('errors_path', metavar='errors.tsv', type=pathlib.Path,
     help='File containing data on intra-pair errors.')
-  options.add_argument('context_path', metavar='seq-context.tsv', type=pathlib.Path,
+  io.add_argument('context_path', metavar='seq-context.tsv', type=pathlib.Path,
     help='File containing data on reference sequence context near errors.')
-  options.add_argument('-o', '--output', type=argparse.FileType('w'), default=sys.stdout,
+  io.add_argument('-o', '--output', type=argparse.FileType('w'), default=sys.stdout,
     help='Destination file for output. Warning: Any existing file will be overwritten. '
       'Default: stdout')
+  options = parser.add_argument_group('Options')
   options.add_argument('-h', '--help', action='help',
     help='Print this argument help text and exit.')
   logs = parser.add_argument_group('Logging')
@@ -97,16 +99,6 @@ def tuple_eq(tup1, tup2):
     if getattr(tup1, attr) != getattr(tup2, attr):
       return False
   return True
-
-
-def format_context(context):
-  output = []
-  for i, base in enumerate(context.seq):
-    if i == context.index:
-      output.append('|'+base+'|')
-    else:
-      output.append(base)
-  return ''.join(output)
 
 
 Context = collections.namedtuple('Context', ('chr', 'pos', 'index', 'base', 'seq', 'gc'))
