@@ -12,7 +12,7 @@ from utillib import simplewrap
 assert sys.version_info.major >= 3, 'Python 3 required'
 
 VALUES_TO_STRS = {None:'.'}
-ERROR_FIELDS = ('type', 'ref', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2')
+ERROR_FIELDS = ('type', 'ref', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2', 'qual1', 'qual2')
 DESCRIPTION = simplewrap.wrap(
 f"""Use the overlap between paired-end reads to find sequencing errors.
 Currently only detects SNVs.
@@ -37,7 +37,9 @@ pair described in the preceding 'pair' line. The columns are:
 5. The coordinate of the error in read 1.
 6. The coordinate of the error in read 2.
 7. The allele present in read 1.
-8. The allele present in read 2."""
+8. The allele present in read 2.
+9. The quality score for the error base in read 1.
+10 The quality score for the error base in read 2."""
 )
 
 
@@ -155,13 +157,14 @@ def open_input(align_path):
     if align_path.suffix == '.bam':
       return open_bam(align_path)
     else:
-      return open(align_path)
+      return align_path.open()
 
 
 def open_bam(bam_path):
-  process = subprocess.Popen(('samtools', 'view', bam_path), stdout=subprocess.PIPE)
+  cmd = ('samtools', 'view', bam_path)
+  process = subprocess.Popen(cmd, stdout=subprocess.PIPE, encoding='utf8')
   for line in process.stdout:
-    yield str(line, 'utf8')
+    yield line
 
 
 class Overlapper:
@@ -246,8 +249,10 @@ def get_mismatches(pair):
     overlap_len += 1
     if base1 != base2:
       # logging.debug(f'{ref_coord:4d}: {base1} -> {base2}')
+      qual1 = read1.qual[read1_coord-1]
+      qual2 = read2.qual[read2_coord-1]
       error = Error(
-          type="snv",
+          type='snv',
           rname=read1.qname,
           ref=read1.rname,
           coord1=read1_coord,
@@ -255,6 +260,8 @@ def get_mismatches(pair):
           ref_coord=ref_coord,
           alt1=base1,
           alt2=base2,
+          qual1=qual1,
+          qual2=qual2,
       )
       errors.append(error)
   return errors, overlap_len
@@ -685,16 +692,10 @@ class Pair:
     return True
 
 
-class Error:
-  __slots__ = ('type', 'rname', 'ref', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2')
-  defaults = {'type':'snv'}
-  def __init__(self, **kwargs):
-    for name in self.__slots__:
-      if name in kwargs:
-        setattr(self, name, kwargs[name])
-      else:
-        default = self.defaults.get(name, None)
-        setattr(self, name, default)
+Error = collections.namedtuple(
+  'Error',
+  ('type', 'rname', 'ref', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2', 'qual1', 'qual2'),
+)
 
 
 if __name__ == '__main__':

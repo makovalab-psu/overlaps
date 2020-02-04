@@ -606,7 +606,7 @@ def extract_sites(errors_path: Path) -> Generator[Tuple[str,int],None,None]:
       fields = line.split('\t')
       if fields[0] != 'error':
         continue
-      if len(fields) != 8:
+      if len(fields) < 10:
         raise FormatError(
           f'Errors file {str(errors_path)!r} has wrong number of fields on line: {line_raw!r}.'
         )
