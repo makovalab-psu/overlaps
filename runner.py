@@ -31,6 +31,8 @@ def make_argparser() -> argparse.ArgumentParser:
   io.add_argument('job_config', metavar='slurm-wait-job.ini', type=Path,
     help='Control the pace of the subprocesses with slurm-wait.py.')
   options = parser.add_argument_group('Options')
+  options.add_argument('-s', '--stop-file', type=Path,
+    help='Stop and exit if this file exists.')
   options.add_argument('-b', '--begin', type=int,
     help='Start jobs at this step instead of the beginning.')
   options.add_argument('-t', '--threads', type=int, default=32,
@@ -60,6 +62,9 @@ def main(argv: List[str]) -> Optional[int]:
 
   last_acc = None
   while True:
+    if args.stop_file and args.stop_file.exists():
+      print(f'Stopping as requested by existence of {args.stop_file}..')
+      return 0
 
     # Read in the accessions from their files to understand what's left to do.
     todo_in_file = read_file_as_list(args.todo)
