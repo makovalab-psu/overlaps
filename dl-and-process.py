@@ -219,8 +219,8 @@ def record_progress(progress_path: Optional[Path], step: int) -> None:
   last_run = get_last_run(progress)
   new_data = {
     f'run{last_run}': {
-      'step': step,
-      'when': int(time.time())
+      'end_step': step,
+      'end_time': int(time.time())
     }
   }
   update_config(progress_path, new_data)
