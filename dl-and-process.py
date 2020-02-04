@@ -502,6 +502,7 @@ def analyze(
 
 
 def get_ftp_urls(accession: str) -> List[str]:
+  # Note: If the run is not paired-end, this might return a single url.
   ftp_urls: List[str] = []
   url = EBI_SRA_URL+accession
   response = make_request(url)
