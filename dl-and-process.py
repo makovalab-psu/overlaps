@@ -714,13 +714,32 @@ def warn_or_fail(return_code: int, onerror: str, arg0: str, exe: str=None):
     fail(message)
 
 
-def fail_if_bad_output(outdir: Path, *filenames: str) -> None:
+def fail_if_bad_output(outdir: Path, *filenames: str, wait=5) -> None:
+  """Check if the outputs are missing or empty.
+  Retries `wait` times, waiting an increasing amount of time in-between (specifically wait*2**try
+  seconds). If the output is still bad after `wait` tries, this exits the program."""
+  max_tries = wait
   for filename in filenames:
     path = outdir/filename
+    tries = 0
+    good = None
+    while not good:
+      good, reason = is_good_output(path)
+      tries += 1
+      if not good:
+        if tries >= max_tries:
+          fail(reason)
+        time.sleep(wait)
+        wait *= 2
+
+
+def is_good_output(*paths: Path):
+  for path in paths:
     if not path.is_file():
-      fail(f'Error: File {str(path)!r} not found.')
+      return False, f'File {str(path)!r} not found.'
     if os.path.getsize(path) == 0:
-      fail(f'Error: File {str(path)!r} is empty.')
+      return False, f'File {str(path)!r} is empty.'
+  return True, None
 
 
 def fail(message: str) -> None:
