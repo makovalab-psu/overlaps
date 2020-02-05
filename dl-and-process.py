@@ -64,7 +64,7 @@ def make_argparser() -> argparse.ArgumentParser:
     help='Default: %(default)s bytes per base')
   options.add_argument('--min-mem', type=int, default=16*1024*1024*1024,
     help='Default: %(default)s bytes')
-  options.add_argument('--max-mem', type=int, default=503*1024*1024*1024,
+  options.add_argument('--max-mem', type=int, default=500*1024*1024*1024,
     help='Default: %(default)s bytes')
   options.add_argument('-h', '--help', action='help',
     help='Print this argument help text and exit.')
