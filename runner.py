@@ -10,7 +10,7 @@ from typing import Union, Optional, cast, List, Tuple, Set
 assert sys.version_info.major >= 3, 'Python 3 required'
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-JOB_ARGS = ['--verbose', '--min-ref-size', 2000000, '--mem-ratio', 400, '--slurm']
+JOB_ARGS = ['--verbose', '--min-ref-size', 2000000, '--mem-ratio', 450, '--slurm']
 DESCRIPTION = """"""
 
 
