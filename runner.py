@@ -10,7 +10,7 @@ from typing import Union, Optional, cast, List, Tuple, Set
 assert sys.version_info.major >= 3, 'Python 3 required'
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-JOB_ARGS = ['--verbose', '--min-ref-size', 2000000, '--mem-ratio', 450, '--slurm']
+JOB_ARGS = ['--verbose', '--min-ref-size', 2000000, '--slurm']
 DESCRIPTION = """"""
 
 
@@ -35,6 +35,8 @@ def make_argparser() -> argparse.ArgumentParser:
     help='Start jobs at this step instead of the beginning.')
   options.add_argument('-t', '--threads', type=int, default=32,
     help='Default: %(default)s')
+  options.add_argument('-m', '--mem-ratio', type=int, default=500,
+    help='Passed on to dl-and-process.py. Default: %(default)s')
   options.add_argument('-n', '--pick-node', action='store_true',
     help='Let slurm-wait.py specify which node to run each job on. Passes this option to '
       'dl-and-process.py.')
@@ -90,6 +92,7 @@ def main(argv: List[str]) -> Optional[int]:
     print(f'Launching {next_acc}')
     launch_job(
       next_acc, args.parent_dir, args.job_config, args.threads, args.pick_node, args.begin,
+      args.mem_ratio,
     )
     launched.append(next_acc)
     write_list_to_file(args.launched, launched)
@@ -148,9 +151,10 @@ def wait_for_node(config_path: Path, threads: int, last_acc: str=None) -> Union[
 
 def launch_job(
     acc: str, parent_dir: Path, config: Path, threads: int, pick_node: bool, begin: Optional[int],
+    mem_ratio: int=500,
   ) -> None:
   run_dir = parent_dir/'runs'/acc
-  cmd_raw = cast(list, [SCRIPT_DIR/'dl-and-process.py']) + JOB_ARGS + [
+  cmd_raw = cast(list, [SCRIPT_DIR/'dl-and-process.py']) + JOB_ARGS + ['--mem-ratio', mem_ratio,
     '--threads', threads, '--wait-config', config, '--progress-file', run_dir/'progress.ini',
     '--refs-dir', parent_dir/'refs/individual', parent_dir/'refs/all.complete.fa',
     parent_dir/'refs/seqs_to_refs.tsv', acc, run_dir
