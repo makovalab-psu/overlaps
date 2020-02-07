@@ -131,7 +131,7 @@ def subtract_lists(list1: list, *lists) -> list:
 
 
 def wait_for_node(config_path: Path, threads: int, last_acc: str=None) -> Union[str,bool,None]:
-  cmd_raw: list = ['slurm-wait.py', '--config', config_path, '--cpus', threads]
+  cmd_raw: list = [SCRIPT_DIR/'bfx/slurm-wait.py', '--config', config_path, '--cpus', threads]
   if last_acc:
     #TODO: This could be caught in an infinite loop if the last job finishes too quickly or this
     #      script gets held up (perhaps because of one failed slurm-wait.py command).

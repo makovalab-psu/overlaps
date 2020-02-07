@@ -457,8 +457,8 @@ def get_context(
   metrics = read_metrics(metrics_path)
   ref_path = refs_dir/metrics['ref']
   cmd_raw: List = [
-    'getcontext.py', ref_path, '--chrom-field', 1, '--coord-field', 2, '--window', con_size,
-    '--output', out_path
+    SCRIPT_DIR/'bfx/getcontext.py', ref_path, '--chrom-field', 1, '--coord-field', 2,
+    '--window', con_size, '--output', out_path
   ]
   cmd = list(map(str, cmd_raw))
   logging.warning('+ $ '+' '.join(cmd))
@@ -657,7 +657,7 @@ def parse_value(raw_value: str) -> Scalar:
 
 
 def slurm_wait(config: Path=None, cpus: int=None, mem: str=None) -> Optional[str]:
-  cmd_raw: List[Any] = ['slurm-wait.py']
+  cmd_raw: List[Any] = [SCRIPT_DIR/'bfx/slurm-wait.py']
   if config:
     cmd_raw.extend(['--config', config])
   if cpus:
