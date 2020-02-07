@@ -94,14 +94,19 @@ def main(argv: List[str]) -> Optional[int]:
       next_acc, args.parent_dir, args.job_config, args.threads, args.pick_node, args.begin,
       args.mem_ratio,
     )
-    launched.append(next_acc)
-    write_list_to_file(args.launched, launched)
+    add_entry_to_file(args.launched, next_acc)
     last_acc = next_acc
     #TODO: Add launched jobs to "done" if their progress.ini says they're finished?
     #TODO: Relaunch failed jobs?
     #      Read progress.ini to find out how far they got.
 
   return 0
+
+
+def add_entry_to_file(list_path: Path, entry: str) -> None:
+  data = read_file_as_list(list_path)
+  data.append(entry)
+  write_list_to_file(list_path, data)
 
 
 def read_file_as_list(list_path: Path) -> List[str]:
