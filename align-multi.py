@@ -13,6 +13,7 @@ from typing import List, Dict, Tuple, Any, Union, Optional, cast
 from bfx import samreader
 assert sys.version_info.major >= 3, 'Python 3 required'
 
+SCRIPT_DIR = Path(__file__).resolve().parent
 BAD_FLAGS = (4, 256, 512, 1024, 2048)
 BAD_FLAG_INT = functools.reduce(operator.or_, BAD_FLAGS)
 DESCRIPTION = """Align a sample to the correct reference sequence.
@@ -163,7 +164,10 @@ def align(
     ref_path: Path, fq1_path: Path, fq2_path: Path, out_path: Path, threads: int=1,
     name_sort: bool=False, clobber: bool=False,
 ) -> None:
-  cmd_raw = ['align.py', 'bwa', '--threads', threads, ref_path, fq1_path, fq2_path, '-o', out_path]
+  cmd_raw = [
+    SCRIPT_DIR/'bfx/align.py', 'bwa', '--threads', threads, ref_path, fq1_path, fq2_path,
+    '--out', out_path
+  ]
   if clobber:
     cmd_raw.insert(2, '--clobber')
   cmd = list(map(str, cmd_raw))
