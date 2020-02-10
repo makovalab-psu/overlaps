@@ -3,15 +3,30 @@ import argparse
 import logging
 import pathlib
 import sys
+from utillib import simplewrap
 assert sys.version_info.major >= 3, 'Python 3 required'
 
 BINS = 10
 NULL_STR = '.'
-DESCRIPTION = """Analyze the output of overlaps.py --details and print summary statistics."""
+DESCRIPTION = simplewrap.wrap(
+f"""Analyze the output of overlaps.py --details and print summary statistics.
+The output gives the number of errors overlap bases, and the error rates for
+each sample. The error rates are broken down into {BINS} bins, one for each
+portion of the reads' length.
+If --tsv is given, the output is tab-delimited. For each sample, three lines are
+produced. They give the number of errors, number of overlap bases, and the error
+rates, respectively. Each line has {BINS+3} fields:
+1. The sample name.
+2. What the numbers measure ('overlaps', 'errors', or 'rates').
+3. The value for the sample overall.
+4-{BINS+3}. The value for each bin of the read length."""
+)
+EPILOG = "Note: Differences where one base is N are not counted as errors."
 
 
 def make_argparser():
-  parser = argparse.ArgumentParser(add_help=False, description=DESCRIPTION)
+  parser = argparse.ArgumentParser(add_help=False, description=DESCRIPTION, epilog=EPILOG,
+    formatter_class=argparse.RawDescriptionHelpFormatter)
   options = parser.add_argument_group('Options')
   options.add_argument(
     '-e', '--errors', action='append', nargs=2, metavar=('name', 'errors.tsv'), required=True,
@@ -153,9 +168,8 @@ def get_bin(num, denom, total_bins=BINS):
   """Break the read into `total_bins` bins, and figure out which bin this base is in.
   `num`:   The (1-based) coordinate of the base.
   `denom`: The read length.
-  Returns a 2-tuple: the (0-based) bin, and the remainder (the number of bases past the end of the last bin).
-  So, if base 41 is in bin 5 and base 42 is in bin 6, then the remainder for 42 will be 1, the remainder for
-  43 will be 2, etc."""
+  Returns a 3-tuple: the (0-based) bin, and the left and right boundaries of that bin,
+  in read coordinates."""
   assert num > 0, num
   bin_size = denom/total_bins
   # Subtract 1 to prevent `bin == total_bins` when `num == denom`.
@@ -169,7 +183,8 @@ def get_bin(num, denom, total_bins=BINS):
   left_boundary = int(left_boundary_float)
   right_boundary_float = ((bin+1)*bin_size)+1
   right_boundary = int(right_boundary_float)
-  # When the left_boundary_float is a whole number (11.000..), the left_boundary is actually the previous integer.
+  # When the left_boundary_float is a whole number (11.000..), the left_boundary is actually
+  # the previous integer.
   if left_boundary == left_boundary_float:
     left_boundary -= 1
   if right_boundary == right_boundary_float:

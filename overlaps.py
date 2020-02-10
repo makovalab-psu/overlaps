@@ -16,10 +16,26 @@ ERROR_FIELDS = ('type', 'ref', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2', 
 DESCRIPTION = simplewrap.wrap(
 f"""Use the overlap between paired-end reads to find sequencing errors.
 Currently only detects SNVs.
-Format of the --details (non--human) output is tab-delimited:
+The output is tab-delimited, unless --human is given.
 Null values are indicated by '{VALUES_TO_STRS.get(None, None)}', and boolean values by \
 '{VALUES_TO_STRS.get(True, True)}' and '{VALUES_TO_STRS.get(False, False)}'.
-There are two types of lines. Each line's type is indicated in the first column.
+-
+The "summary" output is three lines:
+The first two give summary statistics on the read lengths and overlap lengths, respectively.
+Each of these first two lines contain four tab-delimited fields:
+minimum, average, median, and maximum.
+The third (and last) line contains 8 tab-delimited fields:
+1. The total number of errors.
+2. The total number of overlap bases.
+3. The total number of well-mapped read pairs.
+4. The total number of read pairs.
+5. The total number of input bases.
+6. The number of errors per base of overlap (column 1 / column 2).
+7. The proportion of reads that were in well-mapped pairs (column 3 / column 4).
+8. The proportion of input bases that were in overlaps (2 * column 2 / column 5).
+-
+The "details" output contains two types of lines:
+Each line's type is indicated in the first column.
 'pair' lines encode information on each pair of reads. The columns are:
 1. 'pair'
 2. The name of the first read in the pair.
@@ -28,8 +44,8 @@ There are two types of lines. Each line's type is indicated in the first column.
 5. Length of the second read. Null if no read 2.
 6. Length of the overlap between the two reads.
 7. How many errors were detected in the overlap.
-'error' lines encode information on each error detected in the overlap of the
-pair described in the preceding 'pair' line. The columns are:
+'error' lines encode information on each error detected in the overlap of
+the pair described in the preceding 'pair' line. The columns are:
 1. 'error'
 2. The type of error: 'snv', 'ins', or 'del'.
 3. The name of the reference sequence the error is in.
