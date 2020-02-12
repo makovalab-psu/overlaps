@@ -619,6 +619,8 @@ def slurm_wait(config: Path=None, cpus: int=None, mem: str=None) -> Optional[str
   if result.returncode != 0:
     fail(f'slurm-wait.py failed with exit code {result.returncode}.')
   node = result.stdout.strip()
+  if node == 'STOP':
+    fail('Stopping as requested, as determined by slurm-wait.py.')
   if node:
     return node
   else:
