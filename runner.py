@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 import argparse
+import configparser
+import importlib
 import logging
 import os
-from pathlib import Path
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Union, Optional, cast, List, Tuple, Set
+try:
+  dl_and_process = importlib.import_module('dl-and-process')
+except ImportError as error:
+  sys.stderr.write(f'Error: Could not import dl-and-process.py as a module: {error}\n')
+  dl_and_process = None
+
 assert sys.version_info.major >= 3, 'Python 3 required'
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -169,11 +177,55 @@ def launch_job(
   if begin:
     cmd_raw[1:1] = ['--begin', begin]
   cmd = list(map(str, cmd_raw))
+  log_id = get_log_id(run_dir)
+  out_log = run_dir/f'dl-and-process.{log_id}.out.log'
+  err_log = run_dir/f'dl-and-process.{log_id}.err.log'
   print('$ '+' '.join(cmd))
-  out_log = run_dir/'dl-and-process.out.log'
-  err_log = run_dir/'dl-and-process.err.log'
   with out_log.open('w') as out_file, err_log.open('w') as err_file:
     subprocess.Popen(cmd, stdout=out_file, stderr=err_file)
+
+
+def get_log_id(run_dir):
+  # Get the number of the last run directly from progress.ini.
+  try:
+    progress = dl_and_process.read_progress(run_dir/'progress.ini')
+    last_run = dl_and_process.get_last_run(progress)
+  except (AttributeError, OSError, configparser.Error):
+    pass
+  else:
+    if last_run is not None:
+      return f'r{last_run+1}'
+  # Failing that, look at the numbers in the existing logs and infer from that.
+  last_log_num = 0
+  for file in run_dir.iterdir():
+    log_num = parse_log_num(file.name)
+    if last_log_num is None:
+      last_log_num = log_num
+    elif log_num is not None:
+      last_log_num = max(log_num, last_log_num)
+  return f'i{last_log_num+1}'
+
+
+
+def parse_log_num(log_name):
+  fields = log_name.split('.')
+  # Does it look like one of our log files?
+  if not (
+      len(fields) in (3, 4) and fields[0] == 'dl-and-process' and fields[-2] in ('out', 'err')
+      and fields[-1] == 'log'
+    ):
+    return None
+  # If there's only 3 fields, it's the old format w/no number. Default to 0.
+  if len(fields) == 3:
+    return None
+  id_field = fields[1]
+  if not (id_field and id_field[0] in 'ri'):
+    return None
+  try:
+    return int(id_field[1:])
+  except ValueError:
+    return None
+
 
 
 def fail(message: str):
