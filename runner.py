@@ -39,8 +39,10 @@ def make_argparser() -> argparse.ArgumentParser:
   io.add_argument('job_config', metavar='slurm-wait-job.ini', type=Path,
     help='Control the pace of the subprocesses with slurm-wait.py.')
   options = parser.add_argument_group('Options')
+  options.add_argument('-s', '--skip', type=Path,
+    help='A file containing accession numbers to skip.')
   options.add_argument('-b', '--begin', type=int,
-    help='Start jobs at this step instead of the beginning.')
+    help='Start jobs at this step instead of the next unfinished step.')
   options.add_argument('-t', '--threads', type=int, default=32,
     help='Default: %(default)s')
   options.add_argument('-m', '--mem-ratio', type=int, default=500,
@@ -75,11 +77,15 @@ def main(argv: List[str]) -> Optional[int]:
     todo_in_file = read_file_as_list(args.todo)
     done = read_file_as_list(args.done)
     launched = read_file_as_list(args.launched)
-    todo = subtract_lists(todo_in_file, done, launched)
-    if not todo:
-      print('Done! No more runs in the todo list.')
+    if args.skip:
+      skip = read_file_as_list(args.skip)
+    else:
+      skip = []
+    queue = subtract_lists(todo_in_file, done, launched, skip)
+    if not queue:
+      print("Done! No more runs in the todo list that we haven't launched.")
       return 0
-    next_acc = todo[0]
+    next_acc = queue[0]
 
     node = wait_for_node(args.this_config, args.threads, last_acc=last_acc)
     if node == 'STOP':
