@@ -15,6 +15,7 @@ assert sys.version_info.major >= 3, 'Python 3 required'
 Scalar = Union[str,int,float]
 Progress = Mapping[str,Mapping[str,Scalar]]
 PROGRESS_TYPES: Dict[str,type] = {
+  'step':int, 'when':int, 'timestamp':int,
   'start_step':int, 'start_time':int, 'end_step':int, 'end_time':int, 'commit_time':int,
 }
 SCRIPT_DIR = Path(__file__).resolve().parent
