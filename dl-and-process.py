@@ -117,46 +117,54 @@ def main(argv: List[str]) -> int:
   # Describe each step and how to perform it.
   steps: Sequence[Dict[str,Any]] = (
     {  # Step 1: Download.
+      'name': 'download',
       'fxn':download,
       'inputs':[],
       'args':[args.acc, args.outdir, slurm_params],
       'outputs':FQ_NAMES,
     },
     {  # Step 2: Align.
+      'name': 'align',
       'fxn':size_and_align,
       'inputs':[{'step':1, 'output':1, 'arg':1}, {'step':1, 'output':2, 'arg':2}],
       'args':[
-        'dummy', 'dummy', mem_params, args.outdir, args.refs_dir,
-        args.seqs_to_refs, args.meta_ref, args.mapq, args.min_ref_size, args.threads, args.acc,
-        slurm_params
+        None, None, mem_params, args.outdir, args.refs_dir, args.seqs_to_refs, args.meta_ref,
+        args.mapq, args.min_ref_size, args.threads, args.acc, slurm_params
       ],
       'outputs':['align.auto.bam'],
     },
     {  # Step 3: Find errors in overlaps.
+      'name': 'overlap',
       'fxn':overlap,
       'inputs':[{'step':2, 'output':1, 'arg':1}],
-      'args':['dummy', args.outdir, args.mapq, slurm_params, args.acc],
+      'args':[None, args.outdir, args.mapq, slurm_params, args.acc],
       'outputs':['errors.tsv'],
     },
     {  # Step 4: Extract the sequence context from the reference.
+      'name': 'getcontext',
       'fxn':get_context,
       'inputs':[{'step':3, 'output':1, 'arg':1}, {'step':4, 'output':1, 'arg':4}],
-      'args':['dummy', args.outdir/'metrics.tsv', args.refs_dir, 'dummy', args.context],
+      'args':[
+        None, args.outdir/'metrics.tsv', args.refs_dir, None, args.context, mem_params,
+        slurm_params, args.acc
+      ],
       'outputs':['seq-context.tsv']
     },
     {  # Step 5: Summarize sequence context.
+      'name': 'sumcontext',
       'fxn':summarize_context,
       'inputs':[
         {'step':3, 'output':1, 'arg':1}, {'step':4, 'output':1, 'arg':2},
         {'step':5, 'output':1, 'arg':3}
       ],
-      'args':['dummy', 'dummy', 'dummy', slurm_params, args.acc],
+      'args':[None, None, None, slurm_params, args.acc],
       'outputs':['seq-context-summary.tsv'],
     },
     {  # Step 6: Calculate statistics on errors.
+      'name': 'analyze',
       'fxn':analyze,
       'inputs':[{'step':3, 'output':1, 'arg':1}, {'step':6, 'output':1, 'arg':2}],
-      'args':['dummy', 'dummy', args.acc, slurm_params],
+      'args':[None, None, args.acc, slurm_params],
       'outputs':['analysis.tsv'],
     },
   )
@@ -176,9 +184,9 @@ def run_steps(steps: Sequence[Dict[str,Any]], begin: int, outdir: Path, progress
     if step_num > 1:
       fail_if_bad_output(outdir, *steps[step_num-2]['outputs'])
     args = insert_input_paths(steps, step['args'], step['inputs'], outdir)
-    step['fxn'](*args)
+    step['fxn'](step['name'], *args)
     fail_if_bad_output(outdir, *step['outputs'])
-    record_progress(progress_file, step_num)
+    record_progress(progress_file, step_num, step['name'])
 
 
 def insert_input_paths(
@@ -191,10 +199,10 @@ def insert_input_paths(
     output_i = input_['output']-1
     arg_i = input_['arg']-1
     output_name = steps[step_i]['outputs'][output_i]
-    if args_list[arg_i] != 'dummy':
+    if args_list[arg_i] is not None:
       fail(
         f'Problem with input file specification: argument {arg_i} of step {step_i} is '
-        f"{args_list[arg_i]!r}, not 'dummy'. (Attempted to replace it with {output_name!r}.)"
+        f"{args_list[arg_i]!r}, not None. (Attempted to replace it with {output_name!r}.)"
       )
     args_list[arg_i] = outdir/output_name
   return args_list
@@ -221,7 +229,7 @@ def init_progress_file(progress_file: Path, start: int, script_dir: Path) -> Non
   write_config(progress_file, progress)
 
 
-def record_progress(progress_path: Optional[Path], step: int) -> None:
+def record_progress(progress_path: Optional[Path], step: int, name: str) -> None:
   if progress_path is None:
     return
   progress = read_progress(progress_path)
@@ -229,7 +237,8 @@ def record_progress(progress_path: Optional[Path], step: int) -> None:
   new_data = {
     f'run{last_run}': {
       'end_step': step,
-      'end_time': int(time.time())
+      'end_step_name': name,
+      'end_time': int(time.time()),
     }
   }
   update_config(progress_path, new_data)
@@ -379,17 +388,15 @@ def get_git_info(git_dir: Path) -> Optional[Dict[str,Any]]:
 
 ########## STEPS ##########
 
-def download(acc: str, outdir: Path, slurm_params: Dict[str,Any]=None) -> None:
+def download(name: str, acc: str, outdir: Path, slurm_params: Dict[str,Any]=None) -> None:
   cmd: List = [SCRIPT_DIR/'download.py', acc, outdir]
   if slurm_params is not None:
-    if 'config' in slurm_params:
-      node = slurm_wait(config=slurm_params['config'], cpus=1, mem='10G')
-      specifier = get_slurm_specifier(node, slurm_params['pick_node'])
-    cmd = ['srun', '-J', acc+':download', '--mem', '16G'] + specifier + cmd
+    cmd = slurmize_cmd(cmd, slurm_params, acc, name, '16G')
   run_command(cmd, onerror='fail', exe='download.py')
 
 
-def size_and_align(fq1_path: Path, fq2_path: Path, mem_params: Dict[str,int], outdir: Path,
+def size_and_align(
+    name: str, fq1_path: Path, fq2_path: Path, mem_params: Dict[str,int], outdir: Path,
     refs_dir: Path, seqs_to_refs: Path, meta_ref: Path, mapq: Optional[int],
     min_ref_size: Optional[int], threads: int, acc: str=None, slurm_params: Dict[str,Any]=None
   ) -> None:
@@ -397,14 +404,15 @@ def size_and_align(fq1_path: Path, fq2_path: Path, mem_params: Dict[str,int], ou
   write_fq_size(outdir/'metrics.tsv', fq_bases, fq_bytes)
   mem_req = format_mem_req(get_mem_req(fq_bases, fq_bytes, **mem_params))
   align(
-    outdir, refs_dir, seqs_to_refs, meta_ref, mapq, min_ref_size, threads, slurm_params, mem_req, acc
+    name, outdir, refs_dir, seqs_to_refs, meta_ref, mapq, min_ref_size, threads, slurm_params,
+    mem_req, acc
   )
 
 
 def align(
-    outdir: Path, refs_dir: Path, seqs_to_refs: Path, meta_ref: Path, mapq: Optional[int],
-    min_ref_size: Optional[int], threads: int, slurm_params: Dict[str,Any]=None, mem_req: str=None,
-    acc: str=None,
+    name: str, outdir: Path, refs_dir: Path, seqs_to_refs: Path, meta_ref: Path, mapq:
+    Optional[int], min_ref_size: Optional[int], threads: int, slurm_params: Dict[str,Any]=None,
+    mem_req: str=None, acc: str=None,
 ) -> None:
   fq1_path, fq2_path = [outdir/name for name in FQ_NAMES]
   cmd: List = [
@@ -418,19 +426,13 @@ def align(
   if min_ref_size is not None:
     cmd[1:1] = ['--min-size', min_ref_size]
   if slurm_params is not None:
-    if 'config' in slurm_params:
-      node = slurm_wait(config=slurm_params['config'], cpus=threads, mem=mem_req)
-      specifier = get_slurm_specifier(node, slurm_params['pick_node'])
-    acc = cast(str, acc)
-    cmd = [
-      'srun', '-J', acc+':align', '--cpus-per-task', threads, '--mem', mem_req
-    ] + specifier + cmd
+    cmd = slurmize_cmd(cmd, slurm_params, acc, name, mem_req, threads)
   run_command(cmd, onerror='fail', exe='align-multi.py')
 
 
 def overlap(
-    align_path: Path, outdir: Path, mapq: Optional[int], slurm_params: Dict[str,Any]=None,
-    acc: str=None
+    name: str, align_path: Path, outdir: Path, mapq: Optional[int],
+    slurm_params: Dict[str,Any]=None, acc: str=None
 ) -> None:
   cmd: List = [
     SCRIPT_DIR/'overlaps.py', '--details', align_path, '--progress', '0',
@@ -439,16 +441,13 @@ def overlap(
   if mapq is not None:
     cmd[1:1] = ['--mapq', mapq]
   if slurm_params is not None:
-    if 'config' in slurm_params:
-      node = slurm_wait(config=slurm_params['config'], cpus=1, mem='24G')
-      specifier = get_slurm_specifier(node, slurm_params['pick_node'])
-    acc = cast(str, acc)
-    cmd = ['srun', '-J', acc+':overlaps', '--mem', '24G'] + specifier + cmd
+    cmd = slurmize_cmd(cmd, slurm_params, acc, name, '24G', 1)
   run_command(cmd, onerror='fail', exe='overlaps.py')
 
 
 def get_context(
-    errors_path: Path, metrics_path: Path, refs_dir: Path, out_path: Path, con_size: int,
+    name: str, errors_path: Path, metrics_path: Path, refs_dir: Path, out_path: Path, con_size: int,
+    mem_params: Dict[str,int], slurm_params: Dict[str,Any]=None, acc: str=None,
 ) -> None:
   metrics = read_metrics(metrics_path)
   ref_path = refs_dir/metrics['ref']
@@ -457,6 +456,11 @@ def get_context(
     '--window', con_size, '--output', out_path
   ]
   cmd = list(map(str, cmd_raw))
+  if slurm_params is not None:
+    our_mem_params = mem_params.copy()
+    our_mem_params['ratio'] = 24
+    mem_req = format_mem_req(get_mem_req(metrics['bases'], metrics['bytes'], **our_mem_params))
+    cmd = slurmize_cmd(cmd, slurm_params, acc, name, mem_req, 1)
   logging.warning('+ $ '+' '.join(cmd))
   process = subprocess.Popen(cmd, stdin=subprocess.PIPE, encoding='utf8')
   for ref, coord in extract_sites(errors_path):
@@ -468,29 +472,23 @@ def get_context(
 
 
 def summarize_context(
-    errors_path: Path, context_path: Path, out_path: Path, slurm_params: Dict[str,Any]=None,
-    acc: str=None,
+    name: str, errors_path: Path, context_path: Path, out_path: Path,
+    slurm_params: Dict[str,Any]=None, acc: str=None,
 ) -> None:
   cmd: List = [SCRIPT_DIR/'summarize-context.py', errors_path, context_path, '--output', out_path]
   if slurm_params is not None:
-    if 'config' in slurm_params:
-      node = slurm_wait(config=slurm_params['config'], cpus=1, mem='24G')
-      specifier = get_slurm_specifier(node, slurm_params['pick_node'])
-    cmd = ['srun', '-J', f'{acc}:sumcontext', '--mem', '16G'] + specifier + cmd
+    cmd = slurmize_cmd(cmd, slurm_params, acc, name, '24G', 1)
   run_command(cmd, onerror='fail', exe='summarize-context.py')
 
 
 def analyze(
-    errors_path: Path, analysis_path: Path, acc: str, slurm_params: Dict[str,Any]=None
+    name: str, errors_path: Path, analysis_path: Path, acc: str, slurm_params: Dict[str,Any]=None
   ) -> None:
   cmd: List = [
     SCRIPT_DIR/'analyze.py', '--tsv', '--errors', acc, errors_path, '--output', analysis_path
   ]
   if slurm_params is not None:
-    if 'config' in slurm_params:
-      node = slurm_wait(config=slurm_params['config'], cpus=1, mem='24G')
-      specifier = get_slurm_specifier(node, slurm_params['pick_node'])
-    cmd = ['srun', '-J', acc+':analyze', '--mem', '24G'] + specifier + cmd
+    cmd = slurmize_cmd(cmd, slurm_params, acc, name, '24G', 1)
   run_command(cmd, onerror='fail', exe='analyze.py')
 
 
@@ -605,6 +603,21 @@ def parse_value(raw_value: str) -> Scalar:
     except ValueError:
       value = raw_value
   return value
+
+
+def slurmize_cmd(
+    cmd: List, slurm_params: Dict[str,Any], acc: Optional[str], name: str, mem: str=None,
+    threads: int=None,
+  ) -> List:
+  node = slurm_wait(config=slurm_params.get('config'), cpus=threads, mem=mem)
+  specifier = get_slurm_specifier(node, slurm_params['pick_node'])
+  job_name = f'{acc}:{name}'
+  slurm_prefix: List = ['srun', '-J', job_name]
+  if mem is not None:
+    slurm_prefix += ['--mem', mem]
+  if threads is not None:
+    slurm_prefix += ['--cpus-per-task', threads]
+  return  slurm_prefix + specifier + cmd
 
 
 def slurm_wait(config: Path=None, cpus: int=None, mem: str=None) -> Optional[str]:
