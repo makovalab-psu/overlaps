@@ -617,7 +617,8 @@ def slurmize_cmd(
     slurm_prefix += ['--mem', mem]
   if threads is not None:
     slurm_prefix += ['--cpus-per-task', threads]
-  return  slurm_prefix + specifier + cmd
+  new_cmd = slurm_prefix + specifier + cmd
+  return  list(map(str, new_cmd))
 
 
 def slurm_wait(config: Path=None, cpus: int=None, mem: str=None) -> Optional[str]:
