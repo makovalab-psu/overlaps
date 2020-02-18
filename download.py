@@ -76,6 +76,10 @@ def get_ftp_urls(accession: str) -> List[str]:
         logging.warning(f'  {line}')
       elif line_num == 10:
         logging.warning(f'  ...')
+  if line_num < 2:
+    raise FormatError(
+      f'Invalid response from {url!r}: Not enough lines! Saw {line_num} instead of 2.'
+    )
   return ftp_urls
 
 
