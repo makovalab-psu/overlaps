@@ -9,6 +9,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Union, Optional, cast, List, Tuple, Set
+slurm_wait = importlib.import_module('bfx.slurm-wait')
 try:
   dl_and_process = importlib.import_module('dl-and-process')
 except ImportError as error:
@@ -18,6 +19,7 @@ except ImportError as error:
 assert sys.version_info.major >= 3, 'Python 3 required'
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+JobList = List[subprocess.Popen]
 JOB_ARGS = ['--verbose', '--min-ref-size', 2000000, '--slurm']
 DESCRIPTION = """"""
 
@@ -70,6 +72,8 @@ def main(argv: List[str]) -> Optional[int]:
 
   logging.basicConfig(stream=args.log, level=args.volume, format='%(message)s')
 
+  running_jobs: JobList = []
+
   last_acc = None
   while True:
 
@@ -98,16 +102,20 @@ def main(argv: List[str]) -> Optional[int]:
     # Just as a safety to mitigate the effects of a runaway loop.
     time.sleep(1)
 
+    # Wait until the number of jobs (child processes is below the max_jobs allowed).
+    running_jobs = wait_for_jobs(running_jobs, args.this_config)
+
+    print(f'Launching {next_acc}')
     run_dir = args.parent_dir/'runs'/next_acc
     try:
       os.mkdir(run_dir)
     except FileExistsError:
       pass
-    print(f'Launching {next_acc}')
-    launch_job(
+    process = launch_job(
       next_acc, args.parent_dir, args.job_config, args.threads, args.pick_node, args.begin,
       args.mem_ratio,
     )
+    running_jobs.append(process)
     add_entry_to_file(args.launched, next_acc)
     last_acc = next_acc
     #TODO: Add launched jobs to "done" if their progress.ini says they're finished?
@@ -168,10 +176,19 @@ def wait_for_node(config_path: Path, threads: int, last_acc: str=None) -> Union[
     return None
 
 
+def wait_for_jobs(running_jobs: JobList, config_path: Path) -> JobList:
+  wait_params = slurm_wait.Parameters(config=config_path)
+  while wait_params.max_jobs is not None and len(running_jobs) >= wait_params.max_jobs:
+    time.sleep(15)
+    wait_params = slurm_wait.Parameters(config=config_path)
+    running_jobs = rm_dead_jobs(running_jobs)
+  return running_jobs
+
+
 def launch_job(
     acc: str, parent_dir: Path, config: Path, threads: int, pick_node: bool, begin: Optional[int],
     mem_ratio: int=500,
-  ) -> None:
+  ) -> subprocess.Popen:
   run_dir = parent_dir/'runs'/acc
   cmd_raw = cast(list, [SCRIPT_DIR/'dl-and-process.py']) + JOB_ARGS + ['--mem-ratio', mem_ratio,
     '--threads', threads, '--wait-config', config, '--progress-file', run_dir/'progress.ini',
@@ -188,7 +205,19 @@ def launch_job(
   err_log = run_dir/f'dl-and-process.{log_id}.err.log'
   print('$ '+' '.join(cmd))
   with out_log.open('w') as out_file, err_log.open('w') as err_file:
-    subprocess.Popen(cmd, stdout=out_file, stderr=err_file)
+    process = subprocess.Popen(cmd, stdout=out_file, stderr=err_file)
+  return process
+
+
+def rm_dead_jobs(jobs_list: JobList) -> JobList:
+  running_jobs: JobList = []
+  for process in jobs_list:
+    result = process.poll()
+    if result is None:
+      running_jobs.append(process)
+    elif result != 0:
+      logging.error(f'Error: Process {process.pid} returned non-zero exit code {result}.')
+  return running_jobs
 
 
 def get_log_id(run_dir):
@@ -202,15 +231,16 @@ def get_log_id(run_dir):
     if last_run is not None:
       return f'r{last_run+1}'
   # Failing that, look at the numbers in the existing logs and infer from that.
-  last_log_num = 0
+  last_log_num = None
   for file in run_dir.iterdir():
     log_num = parse_log_num(file.name)
     if last_log_num is None:
       last_log_num = log_num
     elif log_num is not None:
       last_log_num = max(log_num, last_log_num)
+  if last_log_num is None:
+    last_log_num = 0
   return f'i{last_log_num+1}'
-
 
 
 def parse_log_num(log_name):
@@ -231,7 +261,6 @@ def parse_log_num(log_name):
     return int(id_field[1:])
   except ValueError:
     return None
-
 
 
 def fail(message: str):
