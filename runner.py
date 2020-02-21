@@ -177,8 +177,13 @@ def wait_for_node(config_path: Path, threads: int, last_acc: str=None) -> Union[
 
 
 def wait_for_jobs(running_jobs: JobList, config_path: Path) -> JobList:
+  last_reason = None
   wait_params = slurm_wait.Parameters(config=config_path)
   while wait_params.max_jobs is not None and len(running_jobs) >= wait_params.max_jobs:
+    reason = f'Too many jobs child processes ({len(running_jobs)} >= {wait_params.max_jobs}).'
+    if reason != last_reason:
+      logging.warning(reason)
+      last_reason = reason
     time.sleep(15)
     wait_params = slurm_wait.Parameters(config=config_path)
     running_jobs = rm_dead_jobs(running_jobs)
