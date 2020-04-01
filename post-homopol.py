@@ -37,6 +37,9 @@ def main(argv):
 
   hpol_counts = count_hpol_errors(args.contexts, args.errors)
 
+  if not hpol_counts:
+    logging.warning('No post-homopolymer errors found!')
+
   for line in format_table(sorted(make_table(hpol_counts), key=get_comparable_list)):
     print(line)
 
