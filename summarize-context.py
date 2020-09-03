@@ -202,6 +202,12 @@ def get_error_bases(errors_path):
 
 
 def get_error_base(ref_base, read_base1, read_base2):
+  """Decide which is the error out of two disagreeing bases.
+  This takes two discordant bases (`read_base1` and `read_base2`) from a pair of reads, plus the
+  reference base at that position `ref_base`, and determines which is the error base. It assumes
+  the read base that matches the reference base is the original, "correct" base, and the other read
+  base is the error. If neither matches the reference base, it returns `None`.
+  `ref_base` can also be the sample base instead of the actual base from the reference sequence."""
   if read_base1 == ref_base:
     return read_base2
   elif read_base2 == ref_base:
@@ -211,6 +217,14 @@ def get_error_base(ref_base, read_base1, read_base2):
 
 
 def call_base(error_list, ref_base=None):
+  """Do (naive) variant calling at this site.
+  Provide a series of bases and this will return the most common one.
+  In the case of a tie, it will pick arbitrarily. Or, if a `ref_base` is given, and it's among the
+  bases tied for first place, it will pick that.
+  `error_list`: A sequence of 2-tuples. Each tuple is normally a pair of disagreeing bases from one
+    location in a pair of reads.
+  `ref_base`:   The genomic base at that position from the reference file. If given, only used to
+    break a tie."""
   if not error_list:
     return ref_base
   votes = collections.Counter()
