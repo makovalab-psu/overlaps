@@ -17,7 +17,7 @@ DESCRIPTION = """Download a sample from the SRA."""
 def make_argparser():
   parser = argparse.ArgumentParser(add_help=False, description=DESCRIPTION)
   options = parser.add_argument_group('Options')
-  options.add_argument('accession', metavar='dispname',
+  options.add_argument('accession',
     help='Sample SRA accession number.')
   options.add_argument('outdir', default=Path('.'), type=Path, nargs='?',
     help='Output directory.')
@@ -46,6 +46,7 @@ def main(argv):
 
 def download(accession: str, outdir: Path) -> None:
   for i, url in enumerate(get_ftp_urls(accession), 1):
+    logging.info(f'Downloading {url!r}')
     cmd: List = ['curl', '--silent', '--show-error', url]
     proc1 = subprocess.Popen(cmd, stdout=subprocess.PIPE)
     with (outdir/f'reads_{i}.fastq').open('w') as fq_file:
@@ -56,19 +57,25 @@ def download(accession: str, outdir: Path) -> None:
 def get_ftp_urls(accession: str) -> List[str]:
   ftp_urls: List[str] = []
   url = EBI_SRA_URL+accession
+  logging.info(f'Making request to {url!r}')
   response = make_request(url)
   for line_num, line in enumerate(response.text.splitlines(), 1):
     if line_num == 1:
-      if line != 'fastq_ftp':
-        raise FormatError(f'Invalid response from {url!r}: wrong first line ({line!r})')
+      if line != 'run_accession\tfastq_ftp':
+        raise FormatError(f'Invalid response from {url!r}: wrong first line: {line!r}')
     elif line_num == 2:
-      fields = line.split(';')
-      if len(fields) == 1 and fields[0].endswith('.fastq.gz'):
-        raise FormatError(f'Invalid response from {url!r}: Looks single-ended? ({fields[0]!r})')
-      elif len(fields) == 2 and all([u.startswith('ftp.sra.ebi.ac.uk') for u in fields]):
-        ftp_urls = ['ftp://'+u for u in fields]
+      fields = line.split('\t')
+      if len(fields) != 2:
+        raise FormatError(f'Invalid response from {url!r}: wrong # of fields in 2nd line: {line!r}')
+      if fields[0] != accession:
+        raise FormatError(f'Invalid response from {url!r}: bad field 1 of line 2: {fields[0]!r}')
+      raw_urls = fields[1].split(';')
+      if len(raw_urls) == 1 and raw_urls[0].endswith('.fastq.gz'):
+        raise FormatError(f'Invalid response from {url!r}: Looks single-ended? ({raw_urls[0]!r})')
+      elif len(raw_urls) == 2 and all([u.startswith('ftp.sra.ebi.ac.uk') for u in raw_urls]):
+        ftp_urls = ['ftp://'+u for u in raw_urls]
       else:
-        raise FormatError(f'Invalid response from {url!r}: bad second line ({line!r})')
+        raise FormatError(f'Invalid response from {url!r}: bad urls: {fields[1]!r}')
     else:
       if line_num == 3:
         logging.warning(f'Extra lines in response from {url!r}:')
