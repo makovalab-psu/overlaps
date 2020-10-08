@@ -7,7 +7,6 @@ import logging
 import math
 import pathlib
 import sys
-from matplotlib import pyplot
 from typing import Dict, List
 assert sys.version_info.major >= 3, 'Python 3 required'
 
