@@ -1,0 +1,30 @@
+*.todo.txt
+launched.txt
+skip.txt
+done.txt
+runner-wait.ini
+↓↓↓↓↓
+runner.py
+    ↳ dl-and-process.[ri]*.out.log
+    ↳ dl-and-process.[ri]*.err.log
+    dl-wait.ini
+    ↓
+  - dl-and-process.py
+      ↳ metrics.tsv
+    1. download.py
+         ↳ reads_[12].fastq
+           ↓
+    2. align-multi.py
+         ↳ align.auto.bam
+           ↓
+    3. overlaps.py
+         ↳ errors.tsv
+           ↓||
+    4. bfx/getcontext.py
+         ↳ seq-context.tsv
+           ↓↓|
+    5. summarize-context.py
+         ↳ seq-context-summary.tsv
+             ↓
+    6. analyze.py
+         ↳ analysis.tsv
