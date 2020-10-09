@@ -30,11 +30,14 @@ class FormatError(Exception):
 def make_argparser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(add_help=False, description=DESCRIPTION)
   io = parser.add_argument_group('I/O')
-  io.add_argument('meta_ref', type=Path)
-  io.add_argument('seqs_to_refs', type=Path)
+  io.add_argument('meta_ref', type=Path,
+    help='Meta-reference FASTA file containing all possible references.')
+  io.add_argument('seqs_to_refs', type=Path,
+    help='File mapping sequence names to reference files.')
   io.add_argument('acc', metavar='SRA accession',
     help='Accession number of the run to process.')
-  io.add_argument('outdir', type=Path)
+  io.add_argument('outdir', type=Path,
+    help='The directory to store all the output data in.')
   io.add_argument('-r', '--refs-dir', type=Path, required=True)
   io.add_argument('-p', '--progress-file', type=Path,
     help='File to track how much of the pipeline we\'ve completed. If it exists, this will read '
