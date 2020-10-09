@@ -58,4 +58,4 @@ The notebooks require `matplotlib`, `seaborn`, `pandas`, and `statsmodels` for t
 
 This is how the Python scripts relate to each other. We used `runner.py` to automate launching [`slurm`](https://slurm.schedmd.com/) jobs from a queue. For each SRA accession number, it would launch an instance of `dl-and-process.py`. This script would run the main pipeline, starting with `download.py` and ending in `analyze.py`. The output and input files are in white.
 
-![Pipeline diagram](https://github.com/makovalab-psu/overlaps/raw/master/doc/analysis-flow-v3.75dpi.png "Pipeline diagram")
+![Pipeline diagram](doc/analysis-flow-v3.75dpi.png "Pipeline diagram")
