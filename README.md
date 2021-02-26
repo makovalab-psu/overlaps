@@ -56,6 +56,6 @@ The notebooks require `matplotlib`, `seaborn`, `pandas`, and `statsmodels` for t
 
 ## Pipeline
 
-This is how the Python scripts relate to each other. We used `runner.py` to automate launching [`slurm`](https://slurm.schedmd.com/) jobs from a queue. For each SRA accession number, it would launch an instance of `dl-and-process.py`. This script would run the main pipeline, starting with `download.py` and ending in `analyze.py`. The output and input files are in white.
+This diagram shows the full flow of the analysis. We used `runner.py` to automate launching [`slurm`](https://slurm.schedmd.com/) jobs from a queue. For each SRA accession number, it would launch an instance of `dl-and-process.py`. This script would run the main pipeline, starting with `download.py` and ending in `analyze.py`. The exception is `post-homopol.py`, which was launched manually. The output and input files are in white. Then certain output files are used by the Jupyter notebooks (in green) to produce the tables and figures.
 
-![Pipeline diagram](doc/analysis-flow-v3.75dpi.png "Pipeline diagram")
+![Pipeline diagram](doc/analysis-flow.png "Pipeline diagram")
