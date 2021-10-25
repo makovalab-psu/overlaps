@@ -19,7 +19,7 @@ Currently only detects SNVs.
 The output is tab-delimited, unless --human is given.
 Null values are indicated by '{VALUES_TO_STRS.get(None, None)}', and boolean values by \
 '{VALUES_TO_STRS.get(True, True)}' and '{VALUES_TO_STRS.get(False, False)}'.
--
+
 The "summary" output is three lines:
 The first two give summary statistics on the read lengths and overlap lengths, respectively.
 Each of these first two lines contain four tab-delimited fields:
@@ -33,7 +33,7 @@ The third (and last) line contains 8 tab-delimited fields:
 6. The number of errors per base of overlap (column 1 / column 2).
 7. The proportion of reads that were in well-mapped pairs (column 3 / column 4).
 8. The proportion of input bases that were in overlaps (2 * column 2 / column 5).
--
+
 The "details" output contains two types of lines:
 Each line's type is indicated in the first column.
 'pair' lines encode information on each pair of reads. The columns are:
@@ -268,16 +268,16 @@ def get_mismatches(pair):
       qual1 = read1.qual[read1_coord-1]
       qual2 = read2.qual[read2_coord-1]
       error = Error(
-          type='snv',
-          rname=read1.qname,
-          ref=read1.rname,
-          coord1=read1_coord,
-          coord2=read2_coord,
-          ref_coord=ref_coord,
-          alt1=base1,
-          alt2=base2,
-          qual1=qual1,
-          qual2=qual2,
+        type='snv',
+        rname=read1.qname,
+        ref=read1.rname,
+        coord1=read1_coord,
+        coord2=read2_coord,
+        ref_coord=ref_coord,
+        alt1=base1,
+        alt2=base2,
+        qual1=qual1,
+        qual2=qual2,
       )
       errors.append(error)
   return errors, overlap_len
@@ -439,13 +439,13 @@ def add_computed_stats(stats, counters, precision=6):
   for stat in 'max_overlap', 'min_overlap', 'avg_overlap', 'med_overlap':
     stats[stat] = 0
   if stats['overlap_bp'] > 0:
-    stats['error_rate'] = round(stats['errors']/stats['overlap_bp'], 6)
+    stats['error_rate'] = round(stats['errors']/stats['overlap_bp'], precision)
     summarize_list(stats, 'overlap', counters['overlap_lens'])
   if stats['reads'] > 0:
-    stats['paired_read_frac'] = round(2*stats['pairs']/stats['reads'], 6)
+    stats['paired_read_frac'] = round(2*stats['pairs']/stats['reads'], precision)
     summarize_list(stats, 'rlen', counters['read_lens'])
   if stats['pair_bases'] > 0:
-    stats['overlap_rate'] = round(2*stats['overlap_bp']/stats['pair_bases'], 6)
+    stats['overlap_rate'] = round(2*stats['overlap_bp']/stats['pair_bases'], precision)
 
 
 def summarize_list(stats, datatype, counter, precision=6):
