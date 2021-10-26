@@ -6,6 +6,7 @@ import pathlib
 import subprocess
 import sys
 import time
+import typing
 from bfx import cigarlib
 from bfx import samreader
 from utillib import simplewrap
@@ -44,6 +45,7 @@ Each line's type is indicated in the first column.
 5. Length of the second read. Null if no read 2.
 6. Length of the overlap between the two reads.
 7. How many errors were detected in the overlap.
+8. Whether the pair is oriented with mate 1 forward and mate 2 reverse.
 'error' lines encode information on each error detected in the overlap of
 the pair described in the preceding 'pair' line. The columns are:
 1. 'error'
@@ -332,10 +334,10 @@ def format_read_stats_tsv(errors, pair, overlap_len):
   if pair.is_full:
     read_line = (
       'pair', pair[0].qname, pair.is_well_mapped(cached=True), pair[0].length,
-      pair[1].length, overlap_len, len(errors)
+      pair[1].length, overlap_len, len(errors), pair.forward
     )
   else:
-    read_line = ('pair', pair[0].qname, False, pair[0].length, None, None, 0)
+    read_line = ('pair', pair[0].qname, False, pair[0].length, None, None, 0, None)
   lines.append(read_line)
   for error in errors:
     fields = [getattr(error, field) for field in ERROR_FIELDS]
@@ -642,8 +644,32 @@ class Pair:
       num += 1
     return num
 
+  @property
+  def forward(self):
+    """Returns True if mate 1 is forward and mate 2 is reverse.
+    Returns False if mate1 is reverse and mate 2 is forward.
+    Returns None otherwise (including if the pair isn't full yet)."""
+    mate1 = mate2 = None
+    for read in self:
+      if read is None:
+        return None
+      if read.mate == 1:
+        mate1 = read
+      elif read.mate == 2:
+        mate2 = read
+    if mate1 is None or mate2 is None:
+      return None
+    if mate1.forward and mate2.reverse:
+      return True
+    elif mate1.reverse and mate2.forward:
+      return False
+
   def __len__(self):
-    return len(self._pair)
+    reads = 0
+    for read in self:
+      if read is not None:
+        reads += 1
+    return reads
 
   def __getitem__(self, index):
     return self._pair[index]
@@ -708,10 +734,17 @@ class Pair:
     return True
 
 
-Error = collections.namedtuple(
-  'Error',
-  ('type', 'rname', 'ref', 'ref_coord', 'coord1', 'coord2', 'alt1', 'alt2', 'qual1', 'qual2'),
-)
+class Error(typing.NamedTuple):
+  type: str
+  rname: str
+  ref: str
+  ref_coord: int
+  coord1: int
+  coord2: int
+  alt1: str
+  alt2: str
+  qual1: str
+  qual2: str
 
 
 if __name__ == '__main__':
