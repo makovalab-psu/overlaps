@@ -118,6 +118,7 @@ def main(argv: List[str]) -> int:
     init_progress_file(args.progress_file, begin, SCRIPT_DIR)
 
   # Describe each step and how to perform it.
+  # Note: Step 4 (getcontext) was inserted in commit 7c8cd6b on 2019-11-26.
   steps: Sequence[Dict[str,Any]] = (
     {  # Step 1: Download.
       'name': 'download',
@@ -370,6 +371,20 @@ def dict_get(d: Mapping, *keys: Any) -> Optional[Any]:
     except TypeError:
       return None
   return current_value
+
+
+def read_progress_tsv(progress_path):
+  with progress_path.open() as progress_file:
+    for line_raw in progress_file:
+      fields = line_raw.rstrip('\r\n').split('\t')
+
+
+def update_progress(progress_path, run, event, step, step_name, commit, commit_time):
+  version = 1
+  with progress_path.open('a') as progress_file:
+    timestamp = int(time.time())
+    values = (timestamp, version, run, event, step, step_name, commit, commit_time)
+    print(*values, sep='\t', file=progress_file)
 
 
 def get_git_info(git_dir: Path) -> Optional[Dict[str,Any]]:
