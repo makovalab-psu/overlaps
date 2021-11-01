@@ -46,6 +46,8 @@ Each line's type is indicated in the first column.
 6. Length of the overlap between the two reads.
 7. How many errors were detected in the overlap.
 8. Whether the pair is oriented with mate 1 forward and mate 2 reverse.
+9. The first base of the overlap in reference coordinates.
+10. The last base of the overlap in reference coordinates.
 'error' lines encode information on each error detected in the overlap of
 the pair described in the preceding 'pair' line. The columns are:
 1. 'error'
@@ -60,6 +62,7 @@ the pair described in the preceding 'pair' line. The columns are:
 10 The quality score for the error base in read 2."""
 )
 
+#TODO: Report where the overlap starts and ends in the read pair.
 
 def make_argparser():
   parser = argparse.ArgumentParser(
@@ -152,9 +155,9 @@ def process_file(overlapper, mapq_thres, format, details_files, progress):
   progress_sec = progress*60
   start = int(time.time())
   last = None
-  for errors, pair, overlap_len in overlapper.analyze_overlaps(mapq_thres):
+  for errors, pair, overlap_stats in overlapper.analyze_overlaps(mapq_thres):
     for file in details_files:
-      print(format_read_stats(errors, pair, overlap_len, format=format), end='', file=file)
+      print(format_read_stats(errors, pair, overlap_stats, format=format), end='', file=file)
     is_progress_time, last = is_it_progress_time(progress_sec, start, last)
     if is_progress_time:
       now = int(time.time())
@@ -202,13 +205,13 @@ class Overlapper:
       if not (pair.is_full and pair.is_well_mapped(mapq_thres)):
         yield [], pair, None
         continue
-      errors, overlap_len = get_mismatches(pair)
+      errors, overlap_stats = get_mismatches(pair)
       self.stats['pair_bases'] += len(pair[0].seq) + len(pair[1].seq)
-      self.stats['overlap_bp'] += overlap_len
+      self.stats['overlap_bp'] += overlap_stats.length
       self.stats['errors'] += len(errors)
       self.stats['pairs'] += 1
-      self.counters['overlap_lens'][overlap_len] += 1
-      yield errors, pair, overlap_len
+      self.counters['overlap_lens'][overlap_stats.length] += 1
+      yield errors, pair, overlap_stats
 
 
   def get_pairs(self, incomplete=False):
@@ -245,6 +248,9 @@ class Overlapper:
         pair = Pair()
 
 
+OverlapStats = collections.namedtuple('OverlapStats', ('length', 'start', 'end'))
+
+
 def get_mismatches(pair):
   errors = []
   overlap_len = 0
@@ -252,6 +258,8 @@ def get_mismatches(pair):
   base_map = get_base_map(read2)
   started = False
   read_coords, ref_coords = get_coords(read1)
+  max_ref_coord = -1
+  min_ref_coord = sys.maxsize
   for read1_coord, ref_coord, base1 in zip(read_coords, ref_coords, read1.seq):
     if ref_coord is None:
       # logging.debug(f'None: {base1} -> <INS>')
@@ -264,6 +272,8 @@ def get_mismatches(pair):
       #   logging.debug(f'{ref_coord:4d}: {base1} -> <DEL>')
       continue
     started = True
+    max_ref_coord = max(max_ref_coord, ref_coord)
+    min_ref_coord = min(min_ref_coord, ref_coord)
     overlap_len += 1
     if base1 != base2:
       # logging.debug(f'{ref_coord:4d}: {base1} -> {base2}')
@@ -282,12 +292,16 @@ def get_mismatches(pair):
         qual2=qual2,
       )
       errors.append(error)
-  return errors, overlap_len
+  if max_ref_coord < 0:
+    max_ref_coord = None
+  if min_ref_coord >= sys.maxsize:
+    min_ref_coord = None
+  return errors, OverlapStats(overlap_len, min_ref_coord, max_ref_coord)
 
 
 def get_base_map(read):
   """Return a mapping of reference coordinates to read bases and coordinates.
-  So it returns a dict where each key is `ref_coord` and each value is a tuple of
+  This returns a dict where each key is `ref_coord` and each value is a tuple of
   `(read_coord, read_base)`."""
   base_map = {}
   read_coords, ref_coords = get_coords(read)
@@ -322,22 +336,28 @@ def is_it_progress_time(progress_sec, start, last):
   return False, last
 
 
-def format_read_stats(errors, pair, overlap_len, format='tsv'):
+def format_read_stats(errors, pair, overlap_stats, format='tsv'):
   if format == 'tsv':
-    return format_read_stats_tsv(errors, pair, overlap_len)
+    return format_read_stats_tsv(errors, pair, overlap_stats)
   elif format == 'human':
-    return format_read_stats_human(errors, pair, overlap_len)
+    return format_read_stats_human(errors, pair, overlap_stats)
 
 
-def format_read_stats_tsv(errors, pair, overlap_len):
+def format_read_stats_tsv(errors, pair, overlap_stats):
   lines = []
   if pair.is_full:
+    if overlap_stats is None:
+      olen = ostart = oend = None
+    else:
+      olen = overlap_stats.length
+      ostart = overlap_stats.start
+      oend = overlap_stats.end
     read_line = (
       'pair', pair[0].qname, pair.is_well_mapped(cached=True), pair[0].length,
-      pair[1].length, overlap_len, len(errors), pair.forward
+      pair[1].length, olen, len(errors), pair.forward, ostart, oend
     )
   else:
-    read_line = ('pair', pair[0].qname, False, pair[0].length, None, None, 0, None)
+    read_line = ('pair', pair[0].qname, False, pair[0].length, None, None, 0, None, None, None)
   lines.append(read_line)
   for error in errors:
     fields = [getattr(error, field) for field in ERROR_FIELDS]
@@ -349,11 +369,11 @@ def format_read_stats_tsv(errors, pair, overlap_len):
     return ''
 
 
-def format_read_stats_human(errors, pair, overlap_len):
+def format_read_stats_human(errors, pair, overlap_stats):
   lines = []
   if pair.is_full:
     if pair.is_well_mapped(cached=True):
-      first_line = f'{pair[0].qname}: {len(errors)} errors in {overlap_len}bp'
+      first_line = f'{pair[0].qname}: {len(errors)} errors in {overlap_stats.length}bp'
     else:
       first_line = f'{pair[0].qname}: Not well-mapped.'
   else:
