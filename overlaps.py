@@ -62,7 +62,6 @@ the pair described in the preceding 'pair' line. The columns are:
 10 The quality score for the error base in read 2."""
 )
 
-#TODO: Report where the overlap starts and ends in the read pair.
 
 def make_argparser():
   parser = argparse.ArgumentParser(
