@@ -4,6 +4,7 @@ import logging
 import pathlib
 import sys
 from utillib import simplewrap
+import read_formats
 assert sys.version_info.major >= 3, 'Python 3 required'
 
 BINS = 10
@@ -67,56 +68,14 @@ def main(argv):
   for sample, errors_path_str in args.errors:
     errors_path = pathlib.Path(errors_path_str)
     logging.warning(f'Info: Processing sample {sample}..')
-    metastats[sample] = compile_stats(parse_errors(errors_path))
+    with errors_path.open() as errors_file:
+      metastats[sample] = compile_stats(read_formats.read_errors_file(errors_file))
 
   if args.format == 'tsv':
     print(format_tsv(make_tsv_data(metastats)), file=args.output)
   elif args.format == 'human':
     table = make_table_data(metastats, min_errors=args.min_errors)
     print(format_table(table, spacing=2), file=args.output)
-
-
-def parse_errors(path):
-  pair = None
-  with path.open() as file:
-    for line in file:
-      fields = line.rstrip('\r\n').split('\t')
-      if fields[0] == 'pair':
-        if pair is not None:
-          assert pair['num_errors'] == len(pair['errors']), (pair['num_errors'], len(pair['errors']), pair['name'])
-          yield pair
-        pair = parse_pair_line(fields)
-      elif fields[0] == 'error':
-        error = parse_error_line(fields)
-        pair['errors'].append(error)
-      else:
-        raise ValueError(f'Invalid value in column 1: {fields[0]!r}')
-  if pair is not None:
-    yield pair
-
-
-def parse_pair_line(fields):
-  return {
-    'name': fields[1],
-    'mapped': parse_value(fields[2]),
-    'len1': parse_value(fields[3]),
-    'len2': parse_value(fields[4]),
-    'overlap': parse_value(fields[5]),
-    'num_errors': parse_value(fields[6]),
-    'errors': [],
-  }
-
-
-def parse_error_line(fields):
-  return {
-    'type': fields[1],
-    'ref': fields[2],
-    'ref_coord': parse_value(fields[3]),
-    'coord1': parse_value(fields[4]),
-    'coord2': parse_value(fields[5]),
-    'alt1': fields[6],
-    'alt2': fields[7],
-  }
 
 
 def parse_value(value_str):
@@ -137,21 +96,21 @@ def compile_stats(pairs, total_bins=BINS):
   stats = {
     'overlap': 0,
     'errors': 0,
-    'overlap_binned': [0]*total_bins,
-    'errors_binned': [0]*total_bins,
+    'overlap_binned': [0] * total_bins,
+    'errors_binned': [0] * total_bins,
   }
   for pair in pairs:
-    if pair['mapped']:
-      overlap_binned1 = bin_overlap(pair['overlap'], pair['len1'])
-      overlap_binned2 = bin_overlap(pair['overlap'], pair['len1'])
-      stats['overlap'] += pair['overlap']
+    if pair.mapped:
+      overlap_binned1 = bin_overlap(pair.overlap.len, pair.len1)
+      overlap_binned2 = bin_overlap(pair.overlap.len, pair.len1)
+      stats['overlap'] += pair.overlap.len
       add_overlap_bins(stats['overlap_binned'], overlap_binned1, overlap_binned2)
-      for error in pair['errors']:
-        if error['alt1'] == 'N' or error['alt2'] == 'N':
+      for error in pair.errors:
+        if error.base1 == 'N' or error.base2 == 'N':
           continue
         stats['errors'] += 1
-        bin1, *rest = get_bin(error['coord1'], pair['len1'], total_bins=total_bins)
-        bin2, *rest = get_bin(error['coord2'], pair['len2'], total_bins=total_bins)
+        bin1 = get_bin(error.read_coord1, pair.len1, total_bins=total_bins)[0]
+        bin2 = get_bin(error.read_coord2, pair.len2, total_bins=total_bins)[0]
         bin = max(bin1, bin2)
         stats['errors_binned'][bin] += 1
   return stats
