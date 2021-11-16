@@ -1,4 +1,4 @@
-"""Parse errors.tsv (the output of overlap.py --details)."""
+"""Parse formats produced by the scripts in this repo."""
 import collections
 
 
@@ -73,7 +73,7 @@ Error.__eq__ = Pair.__eq__ = Overlap.__eq__ = tuple_eq
 
 
 def read_errors_file(errors_file):
-  """Parse the errors file and return the data.
+  """Parse the errors file (the output of overlap.py --details) and return the data.
   This will yield each Pair in the errors file. This includes the data in the "error" lines, since
   each Pair includes every associated Error as a list in its `errors` field."""
   pair = None
