@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 import argparse
 import difflib
+import enum
 import logging
-import os
 import pathlib
 import subprocess
 import sys
@@ -82,23 +82,24 @@ GlobalsAfterMeta = globals().copy()
 ##### Active tests #####
 
 def overlapper(test_name):
-  script_name = 'overlaps.py'
-  script = ROOT_DIR / script_name
-  input_name = 'overlap.align.bam'
-  output_name = 'overlap.details.out.tsv'
-  print(f'{test_name} ::: {script_name} ::: {input_name}\t', end='')
-  cmd = (script, '--details', TESTS_DIR/input_name)
-  result, exit_code = run_command_and_capture(cmd, onerror='stderr')
-  if exit_code != 0:
-    print('FAILED')
-  else:
-    expected = read_file(TESTS_DIR/output_name)
-    if result != expected:
-      print('FAILED')
-      for line in trimmed_diff(expected.splitlines(), result.splitlines()):
-        print(line)
-    else:
-      print('success')
+  do_simple_test(
+    test_name, 'overlaps.py', 'overlap.align.bam', 'overlap.details.out.tsv',
+    ('--details', Placeholders.INPUT)
+  )
+
+
+def read_errors(test_name):
+  do_simple_test(
+    test_name, 'read_formats.py', 'overlap.details.out.tsv', 'read-errors.out.tsv',
+    ('read_errors', Placeholders.INPUT), script=ROOT_DIR/'tests/read-formats-helper.py'
+  )
+
+
+def read_errors_file(test_name):
+  do_simple_test(
+    test_name, 'read_formats.py', 'overlap.details.out.tsv', 'read-errors-file.out.tsv',
+    ('read_errors_file', Placeholders.INPUT), script=ROOT_DIR/'tests/read-formats-helper.py'
+  )
 
 
 GlobalsAfterActive = globals().copy()
@@ -110,6 +111,33 @@ GlobalsAfterInactive = globals().copy()
 
 
 ##### Helper functions #####
+
+class Placeholders(enum.Enum):
+  INPUT = 1
+  OUTPUT = 2
+
+
+def do_simple_test(test_name, script_name, input_name, output_name, cmd_args, script=None):
+  cmd_args = list(cmd_args)
+  print(f'{test_name} ::: {script_name} ::: {input_name}\t', end='')
+  if script is None:
+    script = ROOT_DIR / script_name
+  for i in range(len(cmd_args)):
+    if cmd_args[i] == Placeholders.INPUT:
+      cmd_args[i] = TESTS_DIR/input_name
+    elif cmd_args[i] == Placeholders.OUTPUT:
+      cmd_args[i] = TESTS_DIR/output_name
+  result, exit_code = run_command_and_capture([script]+cmd_args, onerror='stderr')
+  if exit_code != 0:
+    print('FAILED')
+  else:
+    expected = read_file(TESTS_DIR/output_name)
+    if result != expected:
+      print('FAILED')
+      for line in trimmed_diff(expected.splitlines(), result.splitlines()):
+        print(line)
+    else:
+      print('success')
 
 
 def add_dicts(*dicts):
@@ -177,7 +205,7 @@ def read_file(path):
   try:
     with path.open('r') as file:
       return file.read()
-  except OSError:
+  except OSError as error:
     logging.error('Error: {}'.format(error))
     return None
 
@@ -185,8 +213,10 @@ def read_file(path):
 def trimmed_diff(lines1, lines2, lineterm=''):
   """Get a trimmed diff.
   Input lines should be newline-free."""
-  diff_lines = difflib.unified_diff(lines1, lines2, n=1, fromfile='a', tofile='b',
-                                    fromfiledate='c', tofiledate='d', lineterm=lineterm)
+  diff_lines = difflib.unified_diff(
+    lines1, lines2, n=1, fromfile='a', tofile='b', fromfiledate='c', tofiledate='d',
+    lineterm=lineterm
+  )
   header_line = 0
   for line in diff_lines:
     if header_line == 0 and line == '--- a\tc'+lineterm:
