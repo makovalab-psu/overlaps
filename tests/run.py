@@ -102,6 +102,13 @@ def read_errors_file(test_name):
   )
 
 
+def analyze(test_name):
+  do_simple_test(
+    test_name, 'analyze.py', 'overlap.details.out.tsv', 'overlap.analysis.tsv',
+    ('--tsv', '--errors', 'foo', Placeholders.INPUT)
+  )
+
+
 GlobalsAfterActive = globals().copy()
 
 

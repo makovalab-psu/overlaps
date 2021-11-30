@@ -4,6 +4,7 @@ import logging
 import pathlib
 import sys
 from utillib import simplewrap
+from bfx import intervallib
 import read_formats
 assert sys.version_info.major >= 3, 'Python 3 required'
 
@@ -40,6 +41,14 @@ def make_argparser():
   options.add_argument('-m', '--min-errors', type=int, default=1000,
     help='Minimum number of errors that must be present in a bin in order to output an error rate. '
       'Default: %(default)s')
+  options.add_argument('-b', '--num-bins', type=int, default=BINS,
+    help='The number of bins to use instead of the default. Default: %(default)s')
+  options.add_argument('-i', '--intervals', type=argparse.FileType('r'),
+    help='A file containing a list of regions to use to filter the data. Only errors and overlaps '
+      'contained in these intervals will be counted. This script will make sure the denominator '
+      'for error rates only counts bases contained in these intervals (AND overlaps). The format '
+      'is one interval per line, in two tab-delimited columns: the start and end coordinates of '
+      'the interval (1-based).')
   options.add_argument('-h', '--help', action='help',
     help='Print this argument help text and exit.')
   logs = parser.add_argument_group('Logging')
@@ -64,12 +73,17 @@ def main(argv):
   if len(samples) < len(args.errors):
     fail('Error: Sample names must all be unique.')
 
+  intervals = None
+  if args.intervals:
+    intervals = intervallib.simplify_intervals(intervallib.read_intervals(args.intervals))
+
   metastats = {}
   for sample, errors_path_str in args.errors:
     errors_path = pathlib.Path(errors_path_str)
     logging.warning(f'Info: Processing sample {sample}..')
     with errors_path.open() as errors_file:
-      metastats[sample] = compile_stats(read_formats.read_errors_file(errors_file))
+      pairs = read_formats.read_errors_file(errors_file)
+      metastats[sample] = compile_stats(pairs, total_bins=args.num_bins, intervals=intervals)
 
   if args.format == 'tsv':
     print(format_tsv(make_tsv_data(metastats)), file=args.output)
@@ -92,7 +106,7 @@ def parse_value(value_str):
     raise
 
 
-def compile_stats(pairs, total_bins=BINS):
+def compile_stats(pairs, total_bins=BINS, intervals=None):
   stats = {
     'overlap': 0,
     'errors': 0,
@@ -100,19 +114,30 @@ def compile_stats(pairs, total_bins=BINS):
     'errors_binned': [0] * total_bins,
   }
   for pair in pairs:
-    if pair.mapped:
-      overlap_binned1 = bin_overlap(pair.overlap.len, pair.len1)
-      overlap_binned2 = bin_overlap(pair.overlap.len, pair.len1)
-      stats['overlap'] += pair.overlap.len
-      add_overlap_bins(stats['overlap_binned'], overlap_binned1, overlap_binned2)
-      for error in pair.errors:
-        if error.base1 == 'N' or error.base2 == 'N':
-          continue
-        stats['errors'] += 1
-        bin1 = get_bin(error.read_coord1, pair.len1, total_bins=total_bins)[0]
-        bin2 = get_bin(error.read_coord2, pair.len2, total_bins=total_bins)[0]
-        bin = max(bin1, bin2)
-        stats['errors_binned'][bin] += 1
+    if not pair.mapped:
+      continue
+    if intervals is None:
+      pair_intervals = None
+    else:
+      # Get the subset of intervals that cover the overlap, so we don't have to search through all
+      # intervals for every calculation in this loop iteration.
+      pair_intervals = intervallib.find_intervals(pair.overlap.start, pair.overlap.end, intervals)
+    kwargs = dict(total_bins=total_bins, intervals=pair_intervals)
+    overlap_binned1 = bin_overlap(pair.overlap.len, pair.len1, **kwargs)
+    overlap_binned2 = bin_overlap(pair.overlap.len, pair.len2, **kwargs)
+    stats['overlap'] += pair.overlap.len
+    add_overlap_bins(stats['overlap_binned'], overlap_binned1, overlap_binned2)
+    for error in pair.errors:
+      if error.base1 == 'N' or error.base2 == 'N':
+        continue
+      # Skip errors outside the filter intervals (if given).
+      if pair_intervals is not None and intervallib.find_interval(error.pos, pair_intervals) is None:
+        continue
+      stats['errors'] += 1
+      bin1 = get_bin(error.read_coord1, pair.len1, total_bins=total_bins)[0]
+      bin2 = get_bin(error.read_coord2, pair.len2, total_bins=total_bins)[0]
+      bin = max(bin1, bin2)
+      stats['errors_binned'][bin] += 1
   return stats
 
 
@@ -127,8 +152,9 @@ def get_bin(num, denom, total_bins=BINS):
   """Break the read into `total_bins` bins, and figure out which bin this base is in.
   `num`:   The (1-based) coordinate of the base.
   `denom`: The read length.
-  Returns a 3-tuple: the (0-based) bin, and the left and right boundaries of that bin,
-  in read coordinates."""
+  Returns a 3-tuple: the (0-based) bin, and the left and right boundaries of that bin, in read
+  coordinates. The left and right boundaries are the (1-based) coordinates of the first and last
+  bases in the bin."""
   assert num > 0, num
   bin_size = denom/total_bins
   # Subtract 1 to prevent `bin == total_bins` when `num == denom`.
@@ -136,7 +162,7 @@ def get_bin(num, denom, total_bins=BINS):
   # Since `bin` is 0-based, if we didn't do this, there'd be `total_bins+1` total bins.
   bin_float = (num-1)/bin_size
   bin = int(bin_float)
-  # The `left_boundary` is where the last bin ended.
+  # The `left_boundary` is where the last bin ended, so it's actually just outside the bin.
   # That is, the last `num` that was in `bin-1`.
   left_boundary_float = (bin*bin_size)+1
   left_boundary = int(left_boundary_float)
@@ -148,36 +174,52 @@ def get_bin(num, denom, total_bins=BINS):
     left_boundary -= 1
   if right_boundary == right_boundary_float:
     right_boundary -= 1
-  return bin, left_boundary, right_boundary
+  # Add 1 to `left_boundary` to get the first base of the bin.
+  return bin, left_boundary+1, right_boundary
 
 
-def bin_overlap(overlap, readlen, total_bins=BINS):
+def bin_overlap(overlap, readlen, total_bins=BINS, intervals=None):
   """Add up how many bases of overlap are in each bin.
   `overlap`: The length of the overlap, in bases. Assumed to be at the end of the read(!)
   `readlen`: The read length.
-  Returns a list `total_bins` long where each element is the number of overlap bases present in each bin."""
-  overlap_binned = []
-  non_overlap = readlen - overlap
-  boundary_bin, *rest = get_bin(max(non_overlap, 1), readlen, total_bins=total_bins)
+  `intervals`: A list of intervals to filter by. Only count bases which appear in one of these
+    intervals. See `find_interval()` for the format and constraints.
+  Returns a list `total_bins` long where each element is the number of overlap bases present in each
+  bin."""
+  bins_bases = []
+  # Get the list of bins as intervals.
+  # Walk through the bins with an example coordinate. Start at 1, then increment by the computed
+  # size of the current bin so that `coord` is always the first base in the bin.
   coord = 1
-  last_bin = None
-  in_overlap = False
+  bins = []
   while coord < readlen:
-    bin, left, right = get_bin(coord, readlen, total_bins=total_bins)
-    if last_bin is not None:
-      assert bin - last_bin == 1, (bin, last_bin, coord, readlen)
-    bin_size = right - left
-    if bin == boundary_bin:
-      overlap_in_bin = right - non_overlap
-      overlap_binned.append(overlap_in_bin)
-      in_overlap = True
-    elif in_overlap:
-      overlap_binned.append(bin_size)
-    else:
-      overlap_binned.append(0)
+    start, end = get_bin(coord, readlen, total_bins=total_bins)[1:]
+    bins.append((start, end))
+    bin_size = end - start + 1
     coord += bin_size
-    last_bin = bin
-  return overlap_binned
+  # Intersect the list of bins with the overlap interval. Note that `intersect_intervals()` only
+  # returns intervals in the intersection, so any bin completely outside the overlap region does
+  # not appear in the list. That is, `len(bins) == total_bins` but `len(overlap_bins) <= total_bins`
+  overlap_start = readlen - overlap + 1
+  overlap_end = readlen
+  overlap_bins = intervallib.intersect_intervals((overlap_start, overlap_end), bins)
+  # Add up the number of overlap bases in each bin.
+  for overlap_bin in overlap_bins:
+    if intervals is None:
+      start, end = overlap_bin
+      bin_bases = end - start + 1
+    else:
+      # Intersect the bin with the filter intervals so we get a list of intervals which are only the
+      # bases in this bin AND in the overlap AND in one of the intervals.
+      bin_intersection = intervallib.intersect_intervals(overlap_bin, intervals)
+      bin_bases = 0
+      for start, end in bin_intersection:
+        bin_bases += end - start + 1
+    bins_bases.append(bin_bases)
+  # Bins completely outside the overlap region aren't included (see comment above), so we need to
+  # left pad the list with zeros (bins with no bases in the overlap).
+  bins_bases = [0] * (total_bins-len(bins_bases)) + bins_bases
+  return bins_bases
 
 
 def make_tsv_data(metastats):
