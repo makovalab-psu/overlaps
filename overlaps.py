@@ -200,7 +200,7 @@ class Overlapper:
       self.stats['reads'] += pair.num_reads
       for read in pair:
         if read is not None:
-          self.counters['read_lens'][read.length] += 1
+          self.counters['read_lens'][len(read.seq)] += 1
       if not (pair.is_full and pair.is_well_mapped(mapq_thres)):
         yield [], pair, None
         continue
@@ -352,8 +352,8 @@ def format_read_stats_tsv(errors, pair, overlap_stats):
       ostart = overlap_stats.start
       oend = overlap_stats.end
     read_line = (
-      'pair', pair[0].qname, pair.is_well_mapped(cached=True), pair[0].length,
-      pair[1].length, olen, len(errors), pair.forward, ostart, oend
+      'pair', pair[0].qname, pair.is_well_mapped(cached=True), len(pair[0].seq), len(pair[1].seq),
+      olen, len(errors), pair.forward, ostart, oend
     )
   else:
     read_line = ('pair', pair[0].qname, False, pair[0].length, None, None, 0, None, None, None)
