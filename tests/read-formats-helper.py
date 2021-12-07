@@ -6,7 +6,7 @@ import sys
 # Path hack to load modules from the parent directory.
 script_dir = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(script_dir.parent))
-import read_formats
+import read_formats # pylint: disable=import-error
 
 DESCRIPTION = """"""
 

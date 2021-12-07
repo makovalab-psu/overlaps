@@ -503,7 +503,7 @@ def analyze(
     name: str, errors_path: Path, analysis_path: Path, acc: str, slurm_params: Dict[str,Any]=None
   ) -> None:
   cmd: List = [
-    SCRIPT_DIR/'analyze.py', '--tsv', '--errors', acc, errors_path, '--output', analysis_path
+    SCRIPT_DIR/'analyze.py', '--tsv', errors_path, '--output', analysis_path
   ]
   if slurm_params is not None:
     cmd = slurmize_cmd(cmd, slurm_params, acc, name, '24G', 1)

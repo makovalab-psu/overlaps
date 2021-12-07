@@ -29,11 +29,9 @@ EPILOG = "Note: Differences where one base is N are not counted as errors."
 def make_argparser():
   parser = argparse.ArgumentParser(add_help=False, description=DESCRIPTION, epilog=EPILOG,
     formatter_class=argparse.RawDescriptionHelpFormatter)
+  parser.add_argument('errors', type=argparse.FileType('r'),
+    help='The errors output by overlaps.py --details.')
   options = parser.add_argument_group('Options')
-  options.add_argument(
-    '-e', '--errors', action='append', nargs=2, metavar=('name', 'errors.tsv'), required=True,
-    help='The errors output by overlaps.py --details. Give a sample name and the path to the '
-      'errors file. Use --errors once for each sample.')
   options.add_argument('-o', '--output', type=argparse.FileType('w'), default=sys.stdout,
     help='Write output to this file instead of stdout.')
   options.add_argument('-t', '--tsv', action='store_const', dest='format', const='tsv', default='human',
@@ -43,12 +41,6 @@ def make_argparser():
       'Default: %(default)s')
   options.add_argument('-b', '--num-bins', type=int, default=BINS,
     help='The number of bins to use instead of the default. Default: %(default)s')
-  options.add_argument('-i', '--intervals', type=argparse.FileType('r'),
-    help='A file containing a list of regions to use to filter the data. Only errors and overlaps '
-      'contained in these intervals will be counted. This script will make sure the denominator '
-      'for error rates only counts bases contained in these intervals (AND overlaps). The format '
-      'is one interval per line, in two tab-delimited columns: the start and end coordinates of '
-      'the interval (1-based).')
   options.add_argument('-h', '--help', action='help',
     help='Print this argument help text and exit.')
   logs = parser.add_argument_group('Logging')
@@ -69,26 +61,13 @@ def main(argv):
 
   logging.basicConfig(stream=args.log, level=args.volume, format='%(message)s')
 
-  samples = set([e[0] for e in args.errors])
-  if len(samples) < len(args.errors):
-    fail('Error: Sample names must all be unique.')
-
-  intervals = None
-  if args.intervals:
-    intervals = intervallib.simplify_intervals(intervallib.read_intervals(args.intervals))
-
-  metastats = {}
-  for sample, errors_path_str in args.errors:
-    errors_path = pathlib.Path(errors_path_str)
-    logging.warning(f'Info: Processing sample {sample}..')
-    with errors_path.open() as errors_file:
-      pairs = read_formats.read_errors_file(errors_file)
-      metastats[sample] = compile_stats(pairs, total_bins=args.num_bins, intervals=intervals)
+  pairs = read_formats.read_errors_file(args.errors)
+  stats = compile_stats(pairs, total_bins=args.num_bins)
 
   if args.format == 'tsv':
-    print(format_tsv(make_tsv_data(metastats)), file=args.output)
+    print(format_tsv(make_tsv_data(stats)), file=args.output)
   elif args.format == 'human':
-    table = make_table_data(metastats, min_errors=args.min_errors)
+    table = make_table_data(stats, min_errors=args.min_errors)
     print(format_table(table, spacing=2), file=args.output)
 
 
@@ -106,32 +85,26 @@ def parse_value(value_str):
     raise
 
 
-def compile_stats(pairs, total_bins=BINS, intervals=None):
-  stats = {
+def init_analysis(total_bins=BINS):
+  return {
     'overlap': 0,
     'errors': 0,
     'overlap_binned': [0] * total_bins,
     'errors_binned': [0] * total_bins,
   }
+
+
+def compile_stats(pairs, total_bins=BINS):
+  stats = init_analysis(total_bins=total_bins)
   for pair in pairs:
     if not pair.mapped:
       continue
-    if intervals is None:
-      pair_intervals = None
-    else:
-      # Get the subset of intervals that cover the overlap, so we don't have to search through all
-      # intervals for every calculation in this loop iteration.
-      pair_intervals = intervallib.find_intervals(pair.overlap.start, pair.overlap.end, intervals)
-    kwargs = dict(total_bins=total_bins, intervals=pair_intervals)
-    overlap_binned1 = bin_overlap(pair.overlap.len, pair.len1, **kwargs)
-    overlap_binned2 = bin_overlap(pair.overlap.len, pair.len2, **kwargs)
+    overlap_binned1 = bin_overlap(pair.overlap.len, pair.len1, total_bins=total_bins)
+    overlap_binned2 = bin_overlap(pair.overlap.len, pair.len2, total_bins=total_bins)
     stats['overlap'] += pair.overlap.len
     add_overlap_bins(stats['overlap_binned'], overlap_binned1, overlap_binned2)
     for error in pair.errors:
       if error.base1 == 'N' or error.base2 == 'N':
-        continue
-      # Skip errors outside the filter intervals (if given).
-      if pair_intervals is not None and intervallib.find_interval(error.pos, pair_intervals) is None:
         continue
       stats['errors'] += 1
       bin1 = get_bin(error.read_coord1, pair.len1, total_bins=total_bins)[0]
@@ -139,6 +112,94 @@ def compile_stats(pairs, total_bins=BINS, intervals=None):
       bin = max(bin1, bin2)
       stats['errors_binned'][bin] += 1
   return stats
+
+
+def analyze_pair(analysis, pair, errors, overlap, total_bins=BINS, intervals=None):
+  readlen1, readlen2 = len(pair[0].seq), len(pair[1].seq)
+  #TODO: Use an overlap length measure that's the number of bases in the overlap shared by both
+  #      reads. It's currently the number of overlap bases in one of the reads, but that can
+  #      include positions in that read that don't exist in the other (indels). Instead, the
+  #      error rate denominator should be the number of opportunities for finding an error, which
+  #      means every time a base in read 1 aligns with a base in read 2.
+  analysis['overlap'] += overlap.length
+  if intervals is None:
+    filtered_intervals = pair_intervals1 = pair_intervals2 = None
+  elif overlap.length > 0:
+    # Get the subset of intervals that cover the overlap, so we don't have to search through all
+    # intervals for every calculation in this loop iteration.
+    filtered_intervals = intervallib.find_intervals(overlap.start, overlap.end, intervals)
+    pair_intervals1 = get_intervals_read_coords(pair[0], filtered_intervals)
+    pair_intervals2 = get_intervals_read_coords(pair[1], filtered_intervals)
+  else:
+    # There's no overlap. Set `pair_intervals` to empty set, which is technically correct (there
+    # are no intervals that cover the overlap, since it doesn't exist). That won't pose problems
+    # for the later calculations, since we will want to count no overlap bases or errors.
+    filtered_intervals = pair_intervals1 = pair_intervals2 = ()
+  kwargs = dict(total_bins=total_bins)
+  overlap_binned1 = bin_overlap(overlap.length, readlen1, intervals=pair_intervals1, **kwargs)
+  overlap_binned2 = bin_overlap(overlap.length, readlen2, intervals=pair_intervals2, **kwargs)
+  add_overlap_bins(analysis['overlap_binned'], overlap_binned1, overlap_binned2)
+  for error in errors:
+    if error.base1 == 'N' or error.base2 == 'N':
+      continue
+    if (
+      filtered_intervals is not None and
+      intervallib.find_interval(error.ref_coord, filtered_intervals) is None
+    ):
+      continue
+    analysis['errors'] += 1
+    bin1 = get_bin(error.read_coord1, readlen1, total_bins=total_bins)[0]
+    bin2 = get_bin(error.read_coord2, readlen2, total_bins=total_bins)[0]
+    bin = max(bin1, bin2)
+    analysis['errors_binned'][bin] += 1
+
+
+def get_intervals_read_coords(read, ref_intervals):
+  """Convert a list of intervals in reference coordinates to a list of intervals in read coordinates."""
+  read_intervals = []
+  readlen = len(read.seq)
+  read_start_ref = read.pos
+  read_end_ref = read.get_end_position()
+  for interval_start_ref, interval_end_ref in ref_intervals:
+    # Convert the start coord.
+    interval_start_read = read.to_read_coord(interval_start_ref)
+    if interval_start_read is None:
+      if interval_start_ref < read_start_ref:
+        interval_start_read = -1
+      else:
+        # We're not before the start, so we must be in an indel. Try walking away from this position
+        # and find the first base outside the indel.
+        interval_start_read = find_closest_read_base(read, interval_start_ref)
+    # Convert the end coord.
+    interval_end_read = read.to_read_coord(interval_end_ref)
+    if interval_end_read is None:
+      if interval_end_ref > read_end_ref:
+        interval_end_read = readlen+1
+      else:
+        # In an indel (see above).
+        interval_end_read = find_closest_read_base(read, interval_end_ref)
+    # Make sure they're in the right order. A read in reverse orientation could switch this.
+    if interval_start_read > interval_end_read:
+      interval_start_read, interval_end_read = interval_end_read, interval_start_read
+    # Add it to the list, if it overlaps the read.
+    if interval_start_read < 0 and interval_end_read < 0:
+      pass # The interval is to the left of the read and doesn't overlap it.
+    elif interval_start_read > readlen and interval_end_read > readlen:
+      pass # The interval is to the right of the read and doesn't overlap it.
+    else:
+      read_intervals.append((interval_start_read, interval_end_read))
+  return read_intervals
+
+
+def find_closest_read_base(read, ref_coord):
+  read_coord = None
+  distance = 0
+  while read_coord is None:
+    distance += 1
+    read_coord = read.to_read_coord(ref_coord-distance)
+    if read_coord is not None:
+      return read_coord
+    read_coord = read.to_read_coord(ref_coord+distance)
 
 
 def add_overlap_bins(totals, overlaps1, overlaps2):
@@ -222,18 +283,17 @@ def bin_overlap(overlap, readlen, total_bins=BINS, intervals=None):
   return bins_bases
 
 
-def make_tsv_data(metastats):
+def make_tsv_data(stats):
   rows = []
-  for sample, stats in metastats.items():
-    overlap_row = [sample, 'overlaps', stats['overlap']] + [int(o) for o in stats['overlap_binned']]
-    rows.append(overlap_row)
-    errors_row = [sample, 'errors', stats['errors']] + stats['errors_binned']
-    rows.append(errors_row)
-    rates = []
-    for errors,  overlaps in zip(stats['errors_binned'], stats['overlap_binned']):
-      rates.append(divide_or_null(100*errors, overlaps))
-    rates_row = [sample, 'rates', divide_or_null(100*stats['errors'], stats['overlap'])] + rates
-    rows.append(rates_row)
+  overlap_row = ['overlaps', stats['overlap']] + [round(o) for o in stats['overlap_binned']]
+  rows.append(overlap_row)
+  errors_row = ['errors', stats['errors']] + stats['errors_binned']
+  rows.append(errors_row)
+  rates = []
+  for errors, overlaps in zip(stats['errors_binned'], stats['overlap_binned']):
+    rates.append(divide_or_null(100*errors, overlaps))
+  rates_row = ['rates', divide_or_null(100*stats['errors'], stats['overlap'])] + rates
+  rows.append(rates_row)
   return rows
 
 
@@ -254,39 +314,40 @@ def format_tsv(rows):
 def format_value(value):
   if value is None:
     return NULL_STR
+  elif value == 0:
+    return '0'
   elif isinstance(value, float):
     return f'{value:0.5f}'
   else:
     return str(value)
 
 
-def make_table_data(metastats, min_errors=1000):
+def make_table_data(stats, min_errors=1000):
   rows = []
-  total_bins = len(list(metastats.values())[0]['errors_binned'])
-  header1 = ['',      'Total',  'Total',   'Error']
-  header2 = ['Sample', 'errors', 'overlap', 'rate']
+  total_bins = len(stats['errors_binned'])
+  header1 = ['Total',  'Total',   'Error']
+  header2 = ['errors', 'overlap', 'rate']
   for i in range(1, total_bins+1):
     header1.append('')
     header2.append(f'Bin{i}')
   rows.append(header1)
   rows.append(header2)
-  for sample, stats in metastats.items():
-    values = []
-    overlaps = stats['overlap']
-    errors = stats['errors']
-    for bin in range(total_bins):
-      overlap_binned = stats['overlap_binned'][bin]
-      errors_binned = stats['errors_binned'][bin]
-      if overlap_binned <= 0:
-        values.append('.')
-      elif errors_binned <= min_errors:
-        values.append('?')
-      else:
-        rate = errors_binned/overlap_binned
-        values.append(f'{100*rate:0.2f}%')
-    err_rate = f'{100*errors/overlaps:0.2f}%'
-    row = [sample, errors, get_human_bp(overlaps), err_rate] + values
-    rows.append(row)
+  values = []
+  overlaps = stats['overlap']
+  errors = stats['errors']
+  for bin in range(total_bins):
+    overlap_binned = stats['overlap_binned'][bin]
+    errors_binned = stats['errors_binned'][bin]
+    if overlap_binned <= 0:
+      values.append('.')
+    elif errors_binned <= min_errors:
+      values.append('?')
+    else:
+      rate = errors_binned/overlap_binned
+      values.append(f'{100*rate:0.2f}%')
+  err_rate = f'{100*errors/overlaps:0.2f}%'
+  row = [errors, get_human_bp(overlaps), err_rate] + values
+  rows.append(row)
   return rows
 
 

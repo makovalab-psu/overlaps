@@ -3,9 +3,11 @@ import argparse
 import difflib
 import enum
 import logging
+import os
 import pathlib
 import subprocess
 import sys
+import tempfile
 import types
 assert sys.version_info.major >= 3, 'Python 3 required'
 
@@ -82,30 +84,41 @@ GlobalsAfterMeta = globals().copy()
 ##### Active tests #####
 
 def overlapper(test_name):
-  do_simple_test(
+  do_test(
     test_name, 'overlaps.py', 'overlap.align.bam', 'overlap.details.out.tsv',
     ('--details', Placeholders.INPUT)
   )
 
 
 def read_errors(test_name):
-  do_simple_test(
+  do_test(
     test_name, 'read_formats.py', 'overlap.details.out.tsv', 'read-errors.out.tsv',
     ('read_errors', Placeholders.INPUT), script=ROOT_DIR/'tests/read-formats-helper.py'
   )
 
 
 def read_errors_file(test_name):
-  do_simple_test(
+  do_test(
     test_name, 'read_formats.py', 'overlap.details.out.tsv', 'read-errors-file.out.tsv',
     ('read_errors_file', Placeholders.INPUT), script=ROOT_DIR/'tests/read-formats-helper.py'
   )
 
 
 def analyze(test_name):
-  do_simple_test(
+  do_test(
     test_name, 'analyze.py', 'overlap.details.out.tsv', 'overlap.analysis.tsv',
-    ('--tsv', '--errors', 'foo', Placeholders.INPUT)
+    ('--tsv', Placeholders.INPUT)
+  )
+
+
+def analyze_intervals(test_name):
+  do_test(
+    test_name, 'overlaps.py', ('intervals1.tsv', 'overlap.align.bam'),
+    'overlap.analysis.intervals1.tsv',
+    (
+      '--intervals', Placeholders.INPUT, Placeholders.INPUT, '--output', '/dev/null',
+      '--analysis', Placeholders.OUTPUT
+    )
   )
 
 
@@ -124,17 +137,22 @@ class Placeholders(enum.Enum):
   OUTPUT = 2
 
 
-def do_simple_test(test_name, script_name, input_name, output_name, cmd_args, script=None):
-  cmd_args = list(cmd_args)
-  print(f'{test_name} ::: {script_name} ::: {input_name}\t', end='')
+def do_test(test_name, script_name, input_names, output_name, raw_args, script=None):
+  if isinstance(input_names, str):
+    input_names = (input_names,)
+  print(f'{test_name} ::: {script_name} ::: {"/".join(input_names)}\t', end='')
   if script is None:
     script = ROOT_DIR / script_name
-  for i in range(len(cmd_args)):
-    if cmd_args[i] == Placeholders.INPUT:
-      cmd_args[i] = TESTS_DIR/input_name
-    elif cmd_args[i] == Placeholders.OUTPUT:
-      cmd_args[i] = TESTS_DIR/output_name
-  result, exit_code = run_command_and_capture([script]+cmd_args, onerror='stderr')
+  try:
+    cmd_args, out_path = get_cmd_args(raw_args, input_names)
+    if out_path is None:
+      result, exit_code = run_command_and_capture([script]+cmd_args, onerror='stderr')
+    else:
+      exit_code = run_command([script]+cmd_args, onerror='stderr')
+      result = read_file(out_path)
+  finally:
+    if out_path:
+      os.remove(out_path)
   if exit_code != 0:
     print('FAILED')
   else:
@@ -145,6 +163,25 @@ def do_simple_test(test_name, script_name, input_name, output_name, cmd_args, sc
         print(line)
     else:
       print('success')
+
+
+def get_cmd_args(raw_args, input_names):
+  cmd_args = []
+  i = 0
+  out_path = None
+  for arg in raw_args:
+    if arg == Placeholders.INPUT:
+      cmd_args.append(TESTS_DIR/input_names[i])
+      i += 1
+    elif arg == Placeholders.OUTPUT:
+      assert out_path is None, out_path
+      fd, out_path_str = tempfile.mkstemp(prefix='run-test.')
+      os.close(fd)
+      out_path = pathlib.Path(out_path_str)
+      cmd_args.append(out_path)
+    else:
+      cmd_args.append(arg)
+  return cmd_args, out_path
 
 
 def add_dicts(*dicts):

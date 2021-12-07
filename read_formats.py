@@ -57,7 +57,7 @@ ERROR_METADATA = [                   # Column
   None,                              # 1
   {'key':'type', 'type':str},        # 2
   {'key':'chr', 'type':str},         # 3
-  {'key':'pos', 'type':int},         # 4
+  {'key':'ref_coord', 'type':int},   # 4
   {'key':'read_coord1', 'type':int}, # 5
   {'key':'read_coord2', 'type':int}, # 6
   {'key':'base1', 'type':str},       # 7
