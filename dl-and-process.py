@@ -453,8 +453,8 @@ def overlap(
     slurm_params: Dict[str,Any]=None, acc: str=None
 ) -> None:
   cmd: List = [
-    SCRIPT_DIR/'overlaps.py', '--details', align_path, '--progress', '0',
-    '--output2', 'summary', outdir/'errors.summary.tsv', '--output', outdir/'errors.tsv'
+    SCRIPT_DIR/'overlaps.py', align_path, '--summary', outdir/'errors.summary.tsv', '--outfile',
+    outdir/'errors.tsv'
   ]
   if mapq is not None:
     cmd[1:1] = ['--mapq', mapq]

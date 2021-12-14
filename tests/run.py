@@ -86,7 +86,7 @@ GlobalsAfterMeta = globals().copy()
 def overlapper(test_name):
   do_test(
     test_name, 'overlaps.py', 'overlap.align.bam', 'overlap.details.out.tsv',
-    ('--details', Placeholders.INPUT)
+    (Placeholders.INPUT,)
   )
 
 
@@ -94,7 +94,7 @@ def overlapper_intervals(test_name):
   do_test(
     test_name, 'overlaps.py', ('intervals1.tsv', 'overlap.align.bam'),
     'overlap.intervals.details.out.tsv',
-    ('--intervals', Placeholders.INPUT, '--details', Placeholders.INPUT)
+    ('--intervals', Placeholders.INPUT, Placeholders.INPUT)
   )
 
 
@@ -124,7 +124,7 @@ def analyze_intervals(test_name):
     test_name, 'overlaps.py', ('intervals1.tsv', 'overlap.align.bam'),
     'overlap.analysis.intervals1.tsv',
     (
-      '--intervals', Placeholders.INPUT, Placeholders.INPUT, '--output', '/dev/null',
+      '--intervals', Placeholders.INPUT, Placeholders.INPUT, '--outfile', '/dev/null',
       '--analysis', Placeholders.OUTPUT
     )
   )

@@ -71,43 +71,30 @@ the pair described in the preceding 'pair' line. The columns are:
 
 def make_argparser():
   parser = argparse.ArgumentParser(
-    description=DESCRIPTION, formatter_class=argparse.RawDescriptionHelpFormatter
+    description=DESCRIPTION, add_help=False, formatter_class=argparse.RawDescriptionHelpFormatter
   )
-  parser.add_argument('align', type=pathlib.Path, nargs='?', default=sys.stdin,
+  io = parser.add_argument_group('I/O')
+  io.add_argument('align', type=pathlib.Path, nargs='?', default=sys.stdin,
     help='Name-sorted BAM or SAM file. Omit to read from stdin.')
-  parser.add_argument('-o', '--output', type=argparse.FileType('w'), default=sys.stdout,
+  io.add_argument('-H', '--human', dest='format', action='store_const', const='human', default='tsv',
+    help='Print human-readable text instead of tab-delimited output.')
+  io.add_argument('-o', '--outfile', type=argparse.FileType('w'), default=sys.stdout,
     help='Print output to this file instead of stdout. Warning: If the file already exists, it '
       'will be overwritten.')
-  parser.add_argument('-m', '--mapq', type=int,
-    help='Mapping quality threshold. Alignments worse than this MAPQ will be ignored.')
-  #TODO:
-  # parser.add_argument('-q', '--phred', type=int,
-  #   help="Don't count bases with PHRED scores below this as errors.")
-  # parser.add_argument('-N', '--ignore-ns', action='store_true',
-  #   help="Don't count N's as errors.")
-  parser.add_argument('-H', '--human', dest='format', action='store_const', const='human',
-    default='tsv',
-    help='Print human-readable text instead of tab-delimited output.')
-  parser.add_argument('-s', '--summary', action='store_true',
-    help='Print summary stats for the entire file. This is the default, unless --details is given. '
-      'Giving --summary AND --details forces both to be printed.')
-  parser.add_argument('-d', '--details', action='store_true',
-    help='Print detailed info for each read pair instead of the summary at the end (unless '
-      '--summary is explicitly given).')
-  parser.add_argument('-a', '--analysis', type=argparse.FileType('w'),
+  io.add_argument('-s', '--summary', type=argparse.FileType('w'),
+    help='Print summary stats for the entire input to this file.')
+  io.add_argument('-a', '--analysis', type=argparse.FileType('w'),
     help='Print an analysis to this file. This is the same summary analyze.py prints. Currently '
       'always prints in tsv format.')
-  parser.add_argument('-O', '--output2', nargs=2, metavar=('{summary,details}', 'PATH/TO/FILE.TXT'),
-    help='Print another stream of output to this file. Indicate whether to print "summary" or '
-      '"details", and the path to print it to.')
-  parser.add_argument('-p', '--progress', type=int, default=15,
-    help='Print periodic updates to stderr while processing large files. Give a number X and this '
-      'will print human-readable stats every X minutes (as well as an initial update X/10 minutes '
-      'in). Give 0 to turn off these messages. Default: %(default)s minutes')
-  parser.add_argument('-S', '--check-order', action='store_true',
-    help="Validate that the input is name-sorted, according to Python's version of lexicographic "
-      'ordering. This will cause the script to fail if a read is discovered out of order.')
-  parser.add_argument('-i', '--intervals', type=argparse.FileType('r'),
+  filters = parser.add_argument_group('Filters')
+  filters.add_argument('-m', '--mapq', type=int,
+    help='Mapping quality threshold. Alignments worse than this MAPQ will be ignored.')
+  #TODO:
+  # filters.add_argument('-q', '--phred', type=int,
+  #   help="Don't count bases with PHRED scores below this as errors.")
+  # filters.add_argument('-N', '--ignore-ns', action='store_true',
+  #   help="Don't count N's as errors.")
+  filters.add_argument('-i', '--intervals', type=argparse.FileType('r'),
     help='A file containing a list of regions to use to filter the errors. Only errors and '
       'overlaps contained in these intervals will be counted. This script will make sure the '
       'denominator for error rates only counts bases contained in these intervals (AND overlaps). '
@@ -115,14 +102,25 @@ def make_argparser():
       'coordinates of the interval (1-based). NOTE: The stats in the "summary" output which '
       'involve the number of overlap bases will use the total overlap, *not* filtered by these '
       'intervals.')
-  parser.add_argument('-P', '--print', action='store_true',
+  options = parser.add_argument_group('Options')
+  options.add_argument('-p', '--progress', type=int, default=0,
+    help='Print periodic updates to stderr while processing large files. Give a number X and this '
+      'will print human-readable stats every X minutes (as well as an initial update X/10 minutes '
+      'in). Off by default.')
+  options.add_argument('-S', '--check-order', action='store_true',
+    help="Validate that the input is name-sorted, according to Python's version of lexicographic "
+      'ordering. This will cause the script to fail if a read is discovered out of order.')
+  options.add_argument('-P', '--print', action='store_true',
     help='Debug print the alignment as cigarlib sees it.')
-  parser.add_argument('-R', '--detailed-read',
+  options.add_argument('-R', '--detailed-read',
     help='When using --print, single out this read and print every reference coordinate of every '
       'base. Give the full read name, ending in a /1 or /2 for the mate.')
-  parser.add_argument('-l', '--log', type=argparse.FileType('w'), default=sys.stderr,
+  options.add_argument('-h', '--help', action='help',
+    help='Print this argument help text and exit.')
+  logs = parser.add_argument_group('Logging')
+  logs.add_argument('-l', '--log', type=argparse.FileType('w'), default=sys.stderr,
     help='Print log messages to this file instead of to stderr. Warning: Will overwrite the file.')
-  volume = parser.add_mutually_exclusive_group()
+  volume = logs.add_mutually_exclusive_group()
   volume.add_argument('-Q', '--quiet', dest='volume', action='store_const', const=logging.CRITICAL,
     default=logging.WARNING)
   volume.add_argument('-v', '--verbose', dest='volume', action='store_const', const=logging.INFO)
@@ -137,50 +135,36 @@ def main(argv):
 
   logging.basicConfig(stream=args.log, level=args.volume, format='%(message)s')
 
+  # Process arguments.
   intervals = None
   if args.intervals:
     intervals = intervallib.simplify_intervals(intervallib.read_intervals(args.intervals))
-
-  # Process arguments.
   align_file = open_input(args.align)
-  summary_files = [args.output]
-  details_files = []
-  if args.details:
-    details_files.append(args.output)
-    if not args.summary:
-      summary_files = []
-  if args.output2:
-    if args.output2[0] == 'details':
-      details_files.append(open(args.output2[1], 'w'))
-    elif args.output2[0] == 'summary':
-      summary_files.append(open(args.output2[1], 'w'))
-    else:
-      fail(f'Invalid --output2 type {args.output2[1]!r}.')
 
   if args.print:
     print_alignment(align_file, args.detailed_read)
     return
 
   overlapper = Overlapper(align_file, check_order=args.check_order)
-  process_file(overlapper, args.mapq, intervals, args.format, details_files, args.progress)
+  process_file(overlapper, args.mapq, intervals, args.format, args.progress, args.outfile)
 
-  if summary_files:
+  if args.summary:
     if args.progress and args.format == 'human':
       print('Finished!', file=sys.stderr)
-    for file in summary_files:
-      print(format_summary_stats(overlapper.stats, overlapper.counters, args.format), file=file)
+    print(
+      format_summary_stats(overlapper.stats, overlapper.counters, args.format), file=args.summary
+    )
   if args.analysis:
     tsv_data = analyze.make_tsv_data(overlapper.analysis)
     print(analyze.format_tsv(tsv_data), file=args.analysis)
 
 
-def process_file(overlapper, mapq_thres, intervals, format, details_files, progress):
+def process_file(overlapper, mapq_thres, intervals, format, progress, errors_file):
   progress_sec = progress * 60
   start = int(time.time())
   last = None
   for errors, pair, overlap in overlapper.analyze_overlaps(mapq_thres, intervals):
-    for file in details_files:
-      print(format_read_stats(errors, pair, overlap, format=format), end='', file=file)
+    print(format_read_stats(errors, pair, overlap, format=format), end='', file=errors_file)
     is_progress_time, last = is_it_progress_time(progress_sec, start, last)
     if is_progress_time:
       now = int(time.time())
