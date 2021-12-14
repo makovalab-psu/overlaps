@@ -121,41 +121,59 @@ def analyze_pair(analysis, pair, errors, overlap, total_bins=BINS, intervals=Non
   #      include positions in that read that don't exist in the other (indels). Instead, the
   #      error rate denominator should be the number of opportunities for finding an error, which
   #      means every time a base in read 1 aligns with a base in read 2.
+  logging.debug('Analyzing pair %s:', pair.first and pair.first.qname)
   analysis['overlap'] += overlap.length
   if intervals is None:
+    logging.debug('  No interval filters.')
     filtered_intervals = pair_intervals1 = pair_intervals2 = None
   elif overlap.length > 0:
     # Get the subset of intervals that cover the overlap, so we don't have to search through all
     # intervals for every calculation in this loop iteration.
+    logging.debug('  Overlap: %sbp.', overlap.length)
     filtered_intervals = intervallib.find_intervals(overlap.start, overlap.end, intervals)
+    logging.debug('  Filtered intervals: %s', filtered_intervals)
     pair_intervals1 = get_intervals_read_coords(pair[0], filtered_intervals)
+    logging.debug('    -> read 1 coords: %s', pair_intervals1)
     pair_intervals2 = get_intervals_read_coords(pair[1], filtered_intervals)
+    logging.debug('    -> read 2 coords: %s', pair_intervals2)
   else:
     # There's no overlap. Set `pair_intervals` to empty set, which is technically correct (there
     # are no intervals that cover the overlap, since it doesn't exist). That won't pose problems
     # for the later calculations, since we will want to count no overlap bases or errors.
+    logging.debug('  No overlap.')
     filtered_intervals = pair_intervals1 = pair_intervals2 = ()
   kwargs = dict(total_bins=total_bins)
   overlap_binned1 = bin_overlap(overlap.length, readlen1, intervals=pair_intervals1, **kwargs)
   overlap_binned2 = bin_overlap(overlap.length, readlen2, intervals=pair_intervals2, **kwargs)
+  if overlap.length > 0:
+    logging.debug('  Overlap bases in read 1 bins: %s', overlap_binned1)
+    logging.debug('  Overlap bases in read 2 bins: %s', overlap_binned2)
   add_overlap_bins(analysis['overlap_binned'], overlap_binned1, overlap_binned2)
   for error in errors:
+    logging.debug(
+      '  Error @ ref %(ref_coord)s/read1 %(read_coord1)s/read2 %(read_coord2)s: %(base1)s -> '
+      '%(base2)s', error._asdict()
+    )
     if error.base1 == 'N' or error.base2 == 'N':
+      logging.debug('    Skipping (contains N).')
       continue
     if (
       filtered_intervals is not None and
       intervallib.find_interval(error.ref_coord, filtered_intervals) is None
     ):
+      logging.debug('    Skipping (not in an interval).')
       continue
     analysis['errors'] += 1
     bin1 = get_bin(error.read_coord1, readlen1, total_bins=total_bins)[0]
     bin2 = get_bin(error.read_coord2, readlen2, total_bins=total_bins)[0]
     bin = max(bin1, bin2)
+    logging.debug('    Read1 bin: %s, read2 bin: %s -> final bin: %s', bin1+1, bin2+1, bin+1)
     analysis['errors_binned'][bin] += 1
 
 
 def get_intervals_read_coords(read, ref_intervals):
-  """Convert a list of intervals in reference coordinates to a list of intervals in read coordinates."""
+  """Convert a list of intervals in reference coordinates to a list of intervals in read
+  coordinates."""
   read_intervals = []
   readlen = len(read.seq)
   read_start_ref = read.pos
@@ -163,21 +181,33 @@ def get_intervals_read_coords(read, ref_intervals):
   for interval_start_ref, interval_end_ref in ref_intervals:
     # Convert the start coord.
     interval_start_read = read.to_read_coord(interval_start_ref)
+    logging.debug('      %s -> %s', interval_start_ref, interval_start_read)
     if interval_start_read is None:
       if interval_start_ref < read_start_ref:
-        interval_start_read = -1
+        logging.debug('        %s < %s', interval_start_ref, read_start_ref)
+        if read.forward:
+          interval_start_read = -1
+        else:
+          interval_start_read = readlen + 1
       else:
         # We're not before the start, so we must be in an indel. Try walking away from this position
         # and find the first base outside the indel.
         interval_start_read = find_closest_read_base(read, interval_start_ref)
+      logging.debug('          start = %s', interval_start_read)
     # Convert the end coord.
     interval_end_read = read.to_read_coord(interval_end_ref)
+    logging.debug('      %s -> %s', interval_end_ref, interval_end_read)
     if interval_end_read is None:
       if interval_end_ref > read_end_ref:
-        interval_end_read = readlen+1
+        logging.debug(f'        %s > %s', interval_end_ref, read_end_ref)
+        if read.forward:
+          interval_end_read = readlen + 1
+        else:
+          interval_end_read = -1
       else:
         # In an indel (see above).
         interval_end_read = find_closest_read_base(read, interval_end_ref)
+      logging.debug('          end = %s', interval_end_read)
     # Make sure they're in the right order. A read in reverse orientation could switch this.
     if interval_start_read > interval_end_read:
       interval_start_read, interval_end_read = interval_end_read, interval_start_read
@@ -273,6 +303,8 @@ def bin_overlap(overlap, readlen, total_bins=BINS, intervals=None):
       # Intersect the bin with the filter intervals so we get a list of intervals which are only the
       # bases in this bin AND in the overlap AND in one of the intervals.
       bin_intersection = intervallib.intersect_intervals(overlap_bin, intervals)
+      if len(bin_intersection) == 0 or bin_intersection[0] != overlap_bin:
+        logging.debug('    %ss & intervals -> %s', overlap_bin, bin_intersection)
       bin_bases = 0
       for start, end in bin_intersection:
         bin_bases += end - start + 1
