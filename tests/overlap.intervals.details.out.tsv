@@ -1,0 +1,13 @@
+pair	AA	True	25	25	0	0	True	.	.
+pair	AB	True	25	25	0	0	True	.	.
+pair	AC	True	24	25	0	0	True	.	.
+pair	AD	True	25	23	0	0	True	.	.
+pair	AE	True	25	25	0	0	True	.	.
+pair	BA	True	36	36	24	1	True	42	65
+error	snv	ref	56	27	22	G	A	H	H
+pair	BB	True	36	36	24	0	True	42	65
+pair	BC	True	36	36	23	0	True	42	65
+pair	BD	True	36	36	23	1	True	42	65
+error	snv	ref	58	29	21	C	A	H	H
+pair	BE	True	36	36	24	0	True	42	65
+pair	CA	False	35	33	.	0	.	.	.

@@ -90,6 +90,14 @@ def overlapper(test_name):
   )
 
 
+def overlapper_intervals(test_name):
+  do_test(
+    test_name, 'overlaps.py', ('intervals1.tsv', 'overlap.align.bam'),
+    'overlap.intervals.details.out.tsv',
+    ('--intervals', Placeholders.INPUT, '--details', Placeholders.INPUT)
+  )
+
+
 def read_errors(test_name):
   do_test(
     test_name, 'read_formats.py', 'overlap.details.out.tsv', 'read-errors.out.tsv',

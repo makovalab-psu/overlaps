@@ -108,11 +108,13 @@ def make_argparser():
     help="Validate that the input is name-sorted, according to Python's version of lexicographic "
       'ordering. This will cause the script to fail if a read is discovered out of order.')
   parser.add_argument('-i', '--intervals', type=argparse.FileType('r'),
-    help='A file containing a list of regions to use to filter the --analysis. Only errors and '
+    help='A file containing a list of regions to use to filter the errors. Only errors and '
       'overlaps contained in these intervals will be counted. This script will make sure the '
       'denominator for error rates only counts bases contained in these intervals (AND overlaps). '
       'The format is one interval per line, in two tab-delimited columns: the start and end '
-      'coordinates of the interval (1-based).')
+      'coordinates of the interval (1-based). NOTE: The stats in the "summary" output which '
+      'involve the number of overlap bases will use the total overlap, *not* filtered by these '
+      'intervals.')
   parser.add_argument('-P', '--print', action='store_true',
     help='Debug print the alignment as cigarlib sees it.')
   parser.add_argument('-R', '--detailed-read',
@@ -209,6 +211,16 @@ def open_bam(bam_path):
     yield line
 
 
+def filter_errors(raw_errors, intervals):
+  if intervals is None:
+    return list(raw_errors)
+  filtered_errors = []
+  for error in raw_errors:
+    if intervallib.find_interval(error.ref_coord, intervals) is not None:
+      filtered_errors.append(error)
+  return filtered_errors
+
+
 class Overlapper:
 
   def __init__(self, align_file, check_order=False, total_bins=BINS):
@@ -227,8 +239,14 @@ class Overlapper:
       if not (pair.is_full and pair.is_well_mapped(mapq_thres)):
         yield [], pair, None
         continue
-      errors, overlap = get_mismatches(pair)
-      analyze.analyze_pair(self.analysis, pair, errors, overlap, intervals=intervals)
+      raw_errors, overlap = get_mismatches(pair)
+      #TODO: Errors are getting filtered twice here: Once in analyze_pair() and once in this
+      #      function. It'd be great to eliminate the duplication of effort, though it might not
+      #      be a signficant performance impact. And it's conceptually more intuitive for
+      #      analyze_pair() to filter both the overlap bases and the errors by the intervals, rather
+      #      than just the overlap bases.
+      analyze.analyze_pair(self.analysis, pair, raw_errors, overlap, intervals=intervals)
+      errors = filter_errors(raw_errors, intervals)
       self.stats['pair_bases'] += len(pair[0].seq) + len(pair[1].seq)
       self.stats['overlap_bp'] += overlap.length
       self.stats['errors'] += len(errors)
