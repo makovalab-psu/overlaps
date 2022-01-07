@@ -241,13 +241,8 @@ def get_intervals_read_coords(read, ref_intervals):
         logger.debug('        found interval_end_read: %s', interval_end_read)
       logger.debug('          end = %s', interval_end_read)
     # Make sure they're in the right order. A read in reverse orientation could switch this.
-    try:
-      if interval_start_read > interval_end_read:
-        interval_start_read, interval_end_read = interval_end_read, interval_start_read
-    except TypeError:
-      logger.dump_all()
-      print(f'interval_start_read: {interval_start_read}, interval_end_read: {interval_end_read}')
-      raise
+    if interval_start_read > interval_end_read:
+      interval_start_read, interval_end_read = interval_end_read, interval_start_read
     # Add it to the list, if it overlaps the read.
     if interval_start_read < 0 and interval_end_read < 0:
       pass # The interval is to the left of the read and doesn't overlap it.
