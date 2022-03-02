@@ -26,16 +26,14 @@ EPILOG = "Note: Differences where one base is N are not counted as errors."
 
 
 class LogAccumulator:
-  def __init__(self, logger=logging, accumulate=True, max_lines=25):
+  def __init__(self, logger=logging, accumulate=True):
     self.logger = logger
-    self.max_lines = max_lines
     self.accumulate = accumulate
     self._lines = []
+    self._archive = []
   def log(self, level, message, *args, **kwargs):
     if self.accumulate:
       self._lines.append((level, message, args, kwargs))
-      while len(self._lines) > self.max_lines:
-        self._lines.pop(0)
     else:
       self.logger.log(level, message, *args, **kwargs)
   def debug(self, message, *args, **kwargs):
@@ -48,9 +46,19 @@ class LogAccumulator:
     self.log(logging.ERROR, message, *args, **kwargs)
   def critical(self, message, *args, **kwargs):
     self.log(logging.CRITICAL, message, *args, **kwargs)
-  def dump_all(self):
-    for level, message, args, kwargs in self._lines:
+  def clear(self):
+    self._archive.extend(self._lines)
+    self._lines = []
+  def dump(self, num_lines=None):
+    if len(self._lines) == 0:
+      return
+    elif num_lines is None:
+      num_lines = len(self._lines)
+    for line in self._lines[-num_lines:]:
+      level, message, args, kwargs = line
       self.logger.log(level, message, *args, *kwargs)
+    self._archive.extend(self._lines)
+    self._lines = []
 
 
 logger = LogAccumulator()
@@ -90,6 +98,7 @@ def main(argv):
   args = parser.parse_args(argv[1:])
 
   logging.basicConfig(stream=args.log, level=args.volume, format='%(message)s')
+  logger.accumulate = False
 
   pairs = read_formats.read_errors_file(args.errors)
   stats = compile_stats(pairs, total_bins=args.num_bins)
@@ -153,6 +162,7 @@ def analyze_pair(analysis, pair, errors, overlap, total_bins=BINS, intervals=Non
   #      means every time a base in read 1 aligns with a base in read 2.
   logger.debug('Analyzing pair %s:', pair.first and pair.first.qname)
   analysis['overlap'] += overlap.length
+  # Get a subset of only the intervals relevant to this read pair.
   if intervals is None:
     logger.debug('  No interval filters.')
     filtered_intervals = pair_intervals1 = pair_intervals2 = None
@@ -172,6 +182,7 @@ def analyze_pair(analysis, pair, errors, overlap, total_bins=BINS, intervals=Non
     # for the later calculations, since we will want to count no overlap bases or errors.
     logger.debug('  No overlap.')
     filtered_intervals = pair_intervals1 = pair_intervals2 = ()
+  # Get the amount of overlap in each bin.
   kwargs = dict(total_bins=total_bins)
   overlap_binned1 = bin_overlap(overlap.length, readlen1, intervals=pair_intervals1, **kwargs)
   overlap_binned2 = bin_overlap(overlap.length, readlen2, intervals=pair_intervals2, **kwargs)
@@ -179,6 +190,7 @@ def analyze_pair(analysis, pair, errors, overlap, total_bins=BINS, intervals=Non
     logger.debug('  Overlap bases in read 1 bins: %s', overlap_binned1)
     logger.debug('  Overlap bases in read 2 bins: %s', overlap_binned2)
   add_overlap_bins(analysis['overlap_binned'], overlap_binned1, overlap_binned2)
+  # Count the number of errors in each bin.
   for error in errors:
     logger.debug(
       '  Error @ ref %(ref_coord)s/read1 %(read_coord1)s/read2 %(read_coord2)s: %(base1)s -> '
@@ -465,7 +477,7 @@ def get_max_widths(rows):
 
 def fail(message):
   logger.critical('Error: '+str(message))
-  logger.dump_all()
+  logger.dump()
   if __name__ == '__main__':
     sys.exit(1)
   else:
