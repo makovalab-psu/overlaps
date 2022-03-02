@@ -92,7 +92,7 @@ def overlapper(test_name):
 
 def overlapper_intervals(test_name):
   do_test(
-    test_name, 'overlaps.py', ('intervals1.tsv', 'overlap.align.bam'),
+    test_name, 'overlaps.py', ('intervals1.bed', 'overlap.align.bam'),
     'overlap.intervals.details.out.tsv',
     ('--intervals', Placeholders.INPUT, Placeholders.INPUT)
   )
@@ -121,7 +121,7 @@ def analyze(test_name):
 
 def analyze_intervals(test_name):
   do_test(
-    test_name, 'overlaps.py', ('intervals1.tsv', 'overlap.align.bam'),
+    test_name, 'overlaps.py', ('intervals1.bed', 'overlap.align.bam'),
     'overlap.analysis.intervals1.tsv',
     (
       '--intervals', Placeholders.INPUT, Placeholders.INPUT, '--outfile', '/dev/null',

@@ -138,7 +138,8 @@ def main(argv):
   # Process arguments.
   intervals = None
   if args.intervals:
-    intervals = intervallib.simplify_intervals(intervallib.read_intervals(args.intervals))
+    raw_intervals = intervallib.read_intervals_bed(args.intervals)
+    intervals = intervallib.simplify_intervals_chrom(raw_intervals)
   align_file = open_input(args.align)
 
   if args.print:
@@ -205,6 +206,18 @@ def filter_errors(raw_errors, intervals):
   return filtered_errors
 
 
+def get_chrom_intervals(intervals, pair):
+  if intervals is None:
+    return None
+  chrom = pair.get('rname', throw=False)
+  if chrom is None:
+    return None
+  try:
+    return intervals[chrom]
+  except KeyError:
+    return None
+
+
 class Overlapper:
 
   def __init__(self, align_file, check_order=False, total_bins=BINS):
@@ -223,14 +236,18 @@ class Overlapper:
       if not (pair.is_full and pair.is_well_mapped(mapq_thres)):
         yield [], pair, None
         continue
+      chrom_intervals = get_chrom_intervals(intervals, pair)
+      if intervals is not None and chrom_intervals is None:
+        # We're filtering by intervals, and this chromosome doesn't have any intervals listed.
+        continue
       raw_errors, overlap = get_mismatches(pair)
       #TODO: Errors are getting filtered twice here: Once in analyze_pair() and once in this
       #      function. It'd be great to eliminate the duplication of effort, though it might not
       #      be a signficant performance impact. And it's conceptually more intuitive for
       #      analyze_pair() to filter both the overlap bases and the errors by the intervals, rather
       #      than just the overlap bases.
-      analyze.analyze_pair(self.analysis, pair, raw_errors, overlap, intervals=intervals)
-      errors = filter_errors(raw_errors, intervals)
+      analyze.analyze_pair(self.analysis, pair, raw_errors, overlap, intervals=chrom_intervals)
+      errors = filter_errors(raw_errors, chrom_intervals)
       self.stats['pair_bases'] += len(pair[0].seq) + len(pair[1].seq)
       self.stats['overlap_bp'] += overlap.length
       self.stats['errors'] += len(errors)
@@ -645,7 +662,11 @@ def fail(message):
     raise Exception('Unrecoverable error')
 
 
-class InvalidState(Exception):
+class PairError(RuntimeError):
+  pass
+
+
+class InvalidState(RuntimeError):
   pass
 
 
@@ -732,6 +753,28 @@ class Pair:
 
   def __str__(self):
     return str(self._pair)
+
+  def get(self, property, throw=True):
+    """Get the value of a SAM column for both reads in the pair.
+    Only valid for columns that could be expected to be identical for both reads:
+    `qname` and `rname`.
+    If the pair isn't full or the values disagree between the mates, this will either return `None`
+    (if `throw` is `False`) or throw a `PairError` (if `throw` is `True`)."""
+    if property not in ('qname', 'rname'):
+      raise ValueError(f'Invalid `property` {property!r}')
+    if not self.is_full:
+      if throw:
+        raise PairError(f'Pair only contains {len(self)} reads.')
+      else:
+        return None
+    value1 = getattr(self[0], property)
+    value2 = getattr(self[1], property)
+    if value1 != value2:
+      if throw:
+        raise PairError(f'Values of property {property!r} differ: {value1!r} vs {value2!r}')
+      else:
+        return None
+    return value1
 
   def add(self, value):
     if self[1] is None:
