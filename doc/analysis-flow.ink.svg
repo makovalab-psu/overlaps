@@ -2056,11 +2056,11 @@
      borderopacity="1.0"
      inkscape:pageopacity="0.0"
      inkscape:pageshadow="2"
-     inkscape:zoom="1"
-     inkscape:cx="3.12638"
-     inkscape:cy="1100.7735"
+     inkscape:zoom="1.4142136"
+     inkscape:cx="308.85232"
+     inkscape:cy="418.50486"
      inkscape:document-units="mm"
-     inkscape:current-layer="layer1"
+     inkscape:current-layer="g37244-5-0-7"
      showgrid="false"
      inkscape:window-width="2560"
      inkscape:window-height="1403"
@@ -3481,7 +3481,7 @@
         <path
            sodipodi:nodetypes="cccccc"
            style="fill:#ffffff;fill-opacity:1;stroke:#000000;stroke-width:0.25;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-           d="m 31.520549,100.05704 v 6.16724 H 75.819726 V 97.027676 H 34.418199 Z"
+           d="m 31.520549,100.05704 v 6.16724 H 76.348893 V 97.027676 H 34.418199 Z"
            id="path27-5-7-6-3-5-7-6"
            inkscape:connector-curvature="0" />
         <path
@@ -3507,7 +3507,7 @@
            y="239.12256"
            x="57.393105"
            id="tspan918-28-5-4-43-7-4"
-           sodipodi:role="line">post-homopols.py</tspan></text>
+           sodipodi:role="line">post-homopols.tsv</tspan></text>
     </g>
     <path
        style="fill:none;stroke:#000000;stroke-width:0.60000002;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-start:url(#TriangleInM-6-5-8-0-2-8)"
@@ -3973,7 +3973,7 @@
     </g>
     <path
        style="fill:none;stroke:#000000;stroke-width:0.60000002;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#marker32398-7-6-6)"
-       d="m 105.01305,351.74781 h 31.58278"
+       d="m 105.38723,351.74781 h 31.2086"
        id="path1104-65-6-8-7-0-0-8-3-4-9-3-4-0-1"
        inkscape:connector-curvature="0"
        sodipodi:nodetypes="cc" />
